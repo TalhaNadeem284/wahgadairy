@@ -175,6 +175,9 @@ table.data tfoot td { font-weight: 700; background: var(--surface-2); border-top
 .bar-fill { height: 100%; background: var(--primary); border-radius: 6px; }
 .mini { font-size: 12px; color: var(--muted); }
 .hidden { display: none !important; }
+details.card > summary { color: var(--text); user-select: none; }
+details.card > summary::-webkit-details-marker { color: var(--muted); }
+details.card[open] > summary { margin-bottom: 4px; }
 .setup-box { max-width: 480px; text-align: center; }
 .setup-box .logo-big { font-size: 44px; margin-bottom: 10px; }
 .setup-box .btn { margin: 6px; }

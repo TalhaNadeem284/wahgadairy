@@ -1054,6 +1054,31 @@ function purchaseModal(purchase, suppliers, onDone) {
   ]));
 }
 
+/** Collapsible card. Remembers open/closed per key in localStorage. */
+function collapsible(titleText, buildContent, key, defaultOpen = false) {
+  let open = defaultOpen;
+  try { const v = localStorage.getItem("wahga.collapse." + key); if (v !== null) open = v === "1"; } catch {}
+  const det = el("details", { class: "card", style: "margin-bottom:14px" });
+  det.open = open;
+  const sum = el("summary", { style: "cursor:pointer;font-weight:600;font-size:15px;list-style:revert" }, titleText);
+  det.append(sum);
+  const body = el("div", { style: "margin-top:12px" });
+  det.append(body);
+  let built = false;
+  function render() {
+    if (built) return;
+    built = true;
+    const node = buildContent();
+    if (node) body.append(node);
+  }
+  if (det.open) render();
+  det.addEventListener("toggle", () => {
+    try { localStorage.setItem("wahga.collapse." + key, det.open ? "1" : "0"); } catch {}
+    if (det.open) render();
+  });
+  return det;
+}
+
 function segmented(options, value, onChange) {
   const wrap = el("div", { class: "row", style: "gap:6px" });
   for (const [v, label] of options) {
@@ -1147,20 +1172,26 @@ VIEWS.expenses = async (main) => {
     const sam = showSamples ? samples.filter((s) => s.litres > 0).sort((a, b) => b.date.localeCompare(a.date)) : [];
     if (sam.length) {
       const totL = sam.reduce((a, s) => a + s.litres, 0);
-      const card = el("div", { class: "card", style: "margin-bottom:14px" });
-      card.append(el("h2", { text: "🧪 Sample milk given (for tracking — not an expense)" }));
-      card.append(el("div", { class: "sub", text: `This milk is already paid for in your purchases, so it does NOT reduce profit again. ${litres(totL)} given this period ≈ ${money(totL * sampleRate)} at ${money(sampleRate)}/L.` }));
-      card.append(dataTable([
-        { header: "Date", key: "date" },
-        { header: "Litres given free", num: true, render: (s) => litres(s.litres) },
-        { header: "≈ Value", num: true, render: (s) => money(s.litres * sampleRate) },
-        { header: "", render: (s) => el("button", { class: "btn sm ghost", onclick: (e) => { e.stopPropagation(); sampleMilkModal(s.date, s.litres, load); } }, "edit") },
-      ], sam, {
-        onRowClick: (s) => sampleMilkModal(s.date, s.litres, load),
-        footer: [{ text: `${sam.length} days` }, { text: litres(totL), num: true }, { text: money(totL * sampleRate), num: true }, { text: "" }],
-        empty: "—",
-      }));
-      container.append(card);
+      container.append(collapsible(
+        `🧪 Sample milk given — ${litres(totL)} (tracking only, not an expense)`,
+        () => {
+          const wrap = el("div");
+          wrap.append(el("div", { class: "sub", text: `This milk is already paid for in your purchases, so it does NOT reduce profit again. ≈ ${money(totL * sampleRate)} at ${money(sampleRate)}/L.` }));
+          wrap.append(dataTable([
+            { header: "Date", key: "date" },
+            { header: "Litres given free", num: true, render: (s) => litres(s.litres) },
+            { header: "≈ Value", num: true, render: (s) => money(s.litres * sampleRate) },
+            { header: "", render: (s) => el("button", { class: "btn sm ghost", onclick: (e) => { e.stopPropagation(); sampleMilkModal(s.date, s.litres, load); } }, "edit") },
+          ], sam, {
+            onRowClick: (s) => sampleMilkModal(s.date, s.litres, load),
+            footer: [{ text: `${sam.length} days` }, { text: litres(totL), num: true }, { text: money(totL * sampleRate), num: true }, { text: "" }],
+            empty: "—",
+          }));
+          return wrap;
+        },
+        "expense-samples",
+        false
+      ));
     }
 
     container.append(dataTable([
