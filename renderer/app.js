@@ -339,28 +339,47 @@ VIEWS.daily = async (main, params) => {
       client_id: r.client_id, name: r.name,
       milk_category: r.milk_category,
       price_per_litre: r.price_per_litre,
+      default_litres: Number(r.default_litres) || 0,
       quantity_litres: r.quantity_litres === "" ? "" : String(r.quantity_litres),
+      hasEntry: !!r.entry_id,
     }));
 
     const totalCell = el("strong", { text: money(0) });
+    const countCell = el("span", { class: "mini" });
     function recalc() {
-      let sum = 0;
+      let sum = 0, n = 0;
       for (const s of state) {
         const q = parseFloat(s.quantity_litres); const p = parseFloat(s.price_per_litre);
-        if (q > 0 && p > 0) sum += q * p;
+        if (q > 0 && p > 0) { sum += q * p; n++; }
       }
       totalCell.textContent = money(sum);
+      countCell.textContent = `${n} of ${state.length} clients`;
     }
 
     const rowsUi = state.map((s) => {
-      const qty = input({ type: "number", min: "0", step: "0.25", value: s.quantity_litres, placeholder: "—", style: "width:90px" });
+      const qty = input({ type: "number", min: "0", step: "0.25", value: s.quantity_litres, placeholder: s.default_litres ? "usual " + s.default_litres : "—", style: "width:90px" });
       qty.addEventListener("input", () => { s.quantity_litres = qty.value; recalc(); });
       const cat = selectBox(META.milkCategories, s.milk_category, { style: "width:110px" });
       cat.addEventListener("change", () => { s.milk_category = cat.value; });
       const price = input({ type: "number", min: "0", step: "0.5", value: s.price_per_litre, style: "width:90px" });
       price.addEventListener("input", () => { s.price_per_litre = price.value; recalc(); });
-      return { s, tr: [s.name, qty, cat, price] };
+      return { s, qty, tr: [s.name, qty, cat, price] };
     });
+
+    // Fill every row from each client's "usual litres/day". onlyEmpty keeps
+    // any amounts already typed (or already saved for this date).
+    function fillUsual(onlyEmpty) {
+      let filled = 0;
+      for (const r of rowsUi) {
+        if (!r.s.default_litres) continue;
+        if (onlyEmpty && r.s.quantity_litres !== "" && parseFloat(r.s.quantity_litres) > 0) continue;
+        r.s.quantity_litres = String(r.s.default_litres);
+        r.qty.value = String(r.s.default_litres);
+        filled++;
+      }
+      recalc();
+      return filled;
+    }
 
     const table = dataTable(
       [
@@ -385,11 +404,40 @@ VIEWS.daily = async (main, params) => {
     }
     recalc();
 
+    const anyDefaults = state.some((s) => s.default_litres > 0);
+    container.append(el("div", { class: "row", style: "margin-bottom:12px" }, [
+      anyDefaults ? el("button", { class: "btn secondary", onclick: () => { const n = fillUsual(true); toast(n ? `Filled ${n} clients with their usual amount` : "Nothing to fill", "ok"); } }, "⚡  Fill usual amounts") : null,
+      anyDefaults ? el("button", { class: "btn secondary", onclick: () => { const n = fillUsual(false); toast(`Reset ${n} rows to usual amounts`, "ok"); } }, "↻  Reset all to usual") : null,
+      el("button", { class: "btn secondary", onclick: fillYesterday }, "📋  Copy yesterday"),
+    ]));
+    if (!anyDefaults) {
+      container.append(el("div", { class: "inline-note", style: "margin-bottom:12px", text: "Tip: set a client's “Usual litres / day” (open the client from Clients) and a “Fill usual amounts” button appears here — one click marks the whole standard round." }));
+    }
+
     container.append(table);
     container.append(el("div", { class: "row between", style: "margin-top:16px" }, [
-      el("div", { class: "mini" }, ["Round total: ", totalCell]),
+      el("div", { class: "mini" }, ["Round total: ", totalCell, "  ·  ", countCell]),
       el("button", { class: "btn", onclick: save }, "💾  Save round"),
     ]));
+
+    async function fillYesterday() {
+      const y = iso(addDays(new Date(date + "T00:00:00"), -1));
+      const prev = await rpc(A.dailyRound(y));
+      const byId = new Map(prev.map((p) => [p.client_id, p]));
+      let filled = 0;
+      for (const r of rowsUi) {
+        const p = byId.get(r.s.client_id);
+        const q = p && p.quantity_litres !== "" ? Number(p.quantity_litres) : 0;
+        if (q > 0) {
+          r.s.quantity_litres = String(q);
+          r.qty.value = String(q);
+          if (p.price_per_litre) { r.s.price_per_litre = String(p.price_per_litre); }
+          filled++;
+        }
+      }
+      recalc();
+      toast(filled ? `Copied ${filled} deliveries from ${y}` : `No deliveries recorded on ${y}`, filled ? "ok" : "err");
+    }
 
     async function save() {
       try {
@@ -431,6 +479,7 @@ VIEWS.clients = async (main) => {
       { header: "Name", render: (c) => el("strong", { text: c.name }) },
       { header: "Phone", key: "phone" },
       { header: "Category", render: (c) => el("span", { class: "badge gray", text: titleCase(c.milk_category) }) },
+      { header: "Usual/day", num: true, render: (c) => (c.default_litres ? litres(c.default_litres) : "—") },
       { header: currency() + " / litre", num: true, render: (c) => money(c.price_per_litre) },
       { header: "Balance", num: true, render: (c) => el("span", { class: c.balance > 0 ? "badge red" : "badge green", text: money(c.balance) }) },
       { header: "Status", render: (c) => el("span", { class: c.active ? "badge green" : "badge gray", text: c.active ? "Active" : "Inactive" }) },
@@ -448,6 +497,7 @@ async function clientDrawer(id) {
     address: client?.address || "",
     price_per_litre: client ? String(client.price_per_litre) : "",
     milk_category: client?.milk_category || "mixed",
+    default_litres: client && client.default_litres ? String(client.default_litres) : "",
     opening_balance: client ? String(client.opening_balance) : "0",
     active: client ? !!client.active : true,
     note: client?.note || "",
@@ -458,6 +508,7 @@ async function clientDrawer(id) {
   const addrI = input({ value: f.address, placeholder: "Street, area" });
   const priceI = input({ type: "number", min: "0", step: "0.5", value: f.price_per_litre, placeholder: "e.g. 220" });
   const catI = selectBox(META.milkCategories, f.milk_category);
+  const dailyI = input({ type: "number", min: "0", step: "0.25", value: f.default_litres, placeholder: "e.g. 2" });
   const openI = input({ type: "number", step: "1", value: f.opening_balance });
   const activeI = input({ type: "checkbox" }); activeI.checked = f.active;
   const noteI = el("textarea", { placeholder: "Optional" }, f.note);
@@ -468,6 +519,7 @@ async function clientDrawer(id) {
   drawer.append(field("Address", addrI));
   drawer.append(field("Price per litre (" + currency() + ")", priceI));
   drawer.append(field("Milk category", catI));
+  drawer.append(field("Usual litres / day — used by “Fill usual amounts” on Daily Entry", dailyI));
   drawer.append(field("Opening balance (" + currency() + ") — amount owed before you started using this app", openI));
   drawer.append(el("label", { class: "row", style: "gap:8px;margin:6px 0" }, [activeI, "Active (currently receiving deliveries)"]));
   drawer.append(field("Note", noteI));
@@ -513,7 +565,8 @@ async function clientDrawer(id) {
         id: client?.id,
         name: nameI.value, phone: phoneI.value, address: addrI.value,
         price_per_litre: priceI.value, milk_category: catI.value,
-        opening_balance: openI.value, active: activeI.checked, note: noteI.value,
+        default_litres: dailyI.value, opening_balance: openI.value,
+        active: activeI.checked, note: noteI.value,
       }));
       toast("Saved", "ok");
       close();

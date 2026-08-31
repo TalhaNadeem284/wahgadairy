@@ -331,6 +331,15 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id);
     CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(issued_date);
   `);
+  // Columns added after the first release — safe on existing databases.
+  ensureColumn("clients", "default_litres", "REAL NOT NULL DEFAULT 0");
+}
+
+function ensureColumn(table, col, decl) {
+  const cols = all(`PRAGMA table_info(${table})`);
+  if (!cols.some((c) => c.name === col)) {
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+  }
 }
 
 function seedSettings() {
@@ -408,24 +417,25 @@ function getClient(id) {
 }
 function saveClient(c) {
   const cat = MILK_CATEGORIES.includes(c.milk_category) ? c.milk_category : "mixed";
+  const defL = Math.max(0, Number(c.default_litres) || 0);
   if (c.id) {
     run(
       `UPDATE clients SET name=?, phone=?, address=?, price_per_litre=?, milk_category=?,
-        opening_balance=?, active=?, note=?, updated_at=datetime('now','localtime') WHERE id=?`,
+        default_litres=?, opening_balance=?, active=?, note=?, updated_at=datetime('now','localtime') WHERE id=?`,
       [
         c.name.trim(), c.phone || null, c.address || null,
-        Number(c.price_per_litre) || 0, cat,
+        Number(c.price_per_litre) || 0, cat, defL,
         Number(c.opening_balance) || 0, c.active ? 1 : 0, c.note || null, c.id,
       ]
     );
     return getClient(c.id);
   }
   const id = insert(
-    `INSERT INTO clients (name, phone, address, price_per_litre, milk_category, opening_balance, active, note)
-     VALUES (?,?,?,?,?,?,?,?)`,
+    `INSERT INTO clients (name, phone, address, price_per_litre, milk_category, default_litres, opening_balance, active, note)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
     [
       c.name.trim(), c.phone || null, c.address || null,
-      Number(c.price_per_litre) || 0, cat,
+      Number(c.price_per_litre) || 0, cat, defL,
       Number(c.opening_balance) || 0, c.active ? 1 : 0, c.note || null,
     ]
   );
@@ -559,6 +569,7 @@ function dailyRound(date) {
       milk_category: e ? e.milk_category : c.milk_category,
       price_per_litre: e ? e.price_per_litre : c.price_per_litre,
       quantity_litres: e ? e.quantity_litres : "",
+      default_litres: c.default_litres || 0,
       entry_id: e ? e.id : null,
     };
   });
