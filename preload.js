@@ -53,6 +53,17 @@ contextBridge.exposeInMainWorld("api", {
   dashboard: () => invoke("reports:dashboard"),
 
   statement: (clientId, from, to) => invoke("statement:get", clientId, from, to),
+  dailyMilkSheet: (from, to) => invoke("sheet:milk", from, to),
+
+  invoicesList: (filter) => invoke("invoices:list", filter),
+  invoicePreview: (clientId, from, to) => invoke("invoices:preview", clientId, from, to),
+  invoiceCreate: (inv) => invoke("invoices:create", inv),
+  invoiceGet: (id) => invoke("invoices:get", id),
+  invoiceDelete: (id) => invoke("invoices:delete", id),
+
+  printHtml: (html) => invoke("print:html", html),
+  savePdf: (html, suggestedName) => invoke("print:pdf", html, suggestedName),
+  // kept for existing callers
   statementPrint: (html) => invoke("print:html", html),
   statementPdf: (html, suggestedName) => invoke("print:pdf", html, suggestedName),
 });

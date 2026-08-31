@@ -313,6 +313,23 @@ function migrate() {
       created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     );
     CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
+    CREATE TABLE IF NOT EXISTS invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_no TEXT NOT NULL,
+      client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      period_from TEXT NOT NULL,
+      period_to TEXT NOT NULL,
+      issued_date TEXT NOT NULL,
+      previous_balance REAL NOT NULL DEFAULT 0,
+      period_litres REAL NOT NULL DEFAULT 0,
+      period_billed REAL NOT NULL DEFAULT 0,
+      period_paid REAL NOT NULL DEFAULT 0,
+      total_due REAL NOT NULL DEFAULT 0,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(issued_date);
   `);
 }
 
@@ -323,12 +340,24 @@ function seedSettings() {
     shop_phone: "",
     statement_footer: "Thank you for your business.",
     currency: "Rs",
+    invoice_prefix: "INV-",
+    next_invoice_no: "1",
   };
   for (const [k, v] of Object.entries(defaults)) {
     if (!get("SELECT value FROM settings WHERE key = ?", [k])) {
       db.run("INSERT INTO settings (key, value) VALUES (?, ?)", [k, v]);
     }
   }
+}
+
+function bumpCounter(key, fallback = 1) {
+  const row = get("SELECT value FROM settings WHERE key = ?", [key]);
+  const n = parseInt(row ? row.value : String(fallback), 10) || fallback;
+  db.run(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    [key, String(n + 1)]
+  );
+  return n;
 }
 
 /* ------------------------------------------------------------------ */
@@ -724,10 +753,67 @@ function dashboard() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  client statement (for print / PDF -> WhatsApp)                     */
+/*  daily milk purchase sheet                                          */
 /* ------------------------------------------------------------------ */
-function clientStatement(clientId, from, to) {
+/**
+ * One row per day for a range: how much milk was bought (litres + cost) and,
+ * for comparison, how much was delivered to clients that day.
+ */
+function dailyMilkSheet(from, to) {
   ensureFresh();
+  const buys = all(
+    `SELECT date,
+            SUM(quantity_litres) litres,
+            SUM(total_cost) cost,
+            COUNT(*) n
+     FROM purchases WHERE date BETWEEN ? AND ? GROUP BY date`,
+    [from, to]
+  );
+  const sells = all(
+    `SELECT date, SUM(quantity_litres) litres, SUM(total_amount) amount
+     FROM milk_entries WHERE date BETWEEN ? AND ? GROUP BY date`,
+    [from, to]
+  );
+  const buyMap = Object.fromEntries(buys.map((r) => [r.date, r]));
+  const sellMap = Object.fromEntries(sells.map((r) => [r.date, r]));
+  const dates = [...new Set([...Object.keys(buyMap), ...Object.keys(sellMap)])].sort();
+
+  const rows = dates.map((date) => {
+    const b = buyMap[date] || { litres: 0, cost: 0, n: 0 };
+    const s = sellMap[date] || { litres: 0, amount: 0 };
+    const purchasedL = round2(b.litres);
+    return {
+      date,
+      purchased_litres: purchasedL,
+      purchased_cost: round2(b.cost),
+      avg_rate: purchasedL ? round2(b.cost / purchasedL) : 0,
+      purchase_count: b.n,
+      delivered_litres: round2(s.litres),
+      delivered_amount: round2(s.amount),
+      difference_litres: round2(purchasedL - s.litres),
+    };
+  });
+
+  const totals = rows.reduce(
+    (a, r) => ({
+      purchased_litres: round2(a.purchased_litres + r.purchased_litres),
+      purchased_cost: round2(a.purchased_cost + r.purchased_cost),
+      delivered_litres: round2(a.delivered_litres + r.delivered_litres),
+      delivered_amount: round2(a.delivered_amount + r.delivered_amount),
+      difference_litres: round2(a.difference_litres + r.difference_litres),
+    }),
+    { purchased_litres: 0, purchased_cost: 0, delivered_litres: 0, delivered_amount: 0, difference_litres: 0 }
+  );
+  totals.avg_rate = totals.purchased_litres ? round2(totals.purchased_cost / totals.purchased_litres) : 0;
+
+  return { from, to, rows, totals, settings: getSettings() };
+}
+
+/* ------------------------------------------------------------------ */
+/*  client statement / invoice (for print / PDF -> WhatsApp)           */
+/* ------------------------------------------------------------------ */
+/** Shared period math used by both the running statement and formal invoices. */
+function statementCore(clientId, from, to) {
   const client = get("SELECT * FROM clients WHERE id = ?", [clientId]);
   if (!client) throw new Error("Client not found.");
 
@@ -750,22 +836,107 @@ function clientStatement(clientId, from, to) {
     [clientId, from, to]
   );
 
+  // day-by-day summary (handy for weekly / 10-day / monthly invoices)
+  const byDayMap = new Map();
+  for (const e of entries) {
+    const d = byDayMap.get(e.date) || { date: e.date, litres: 0, amount: 0 };
+    d.litres = round2(d.litres + e.quantity_litres);
+    d.amount = round2(d.amount + e.total_amount);
+    byDayMap.set(e.date, d);
+  }
+  const byDay = [...byDayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+
   const periodBilled = round2(entries.reduce((a, e) => a + e.total_amount, 0));
   const periodLitres = round2(entries.reduce((a, e) => a + e.quantity_litres, 0));
   const periodPaid = round2(payments.reduce((a, p) => a + p.amount, 0));
   const closingBalance = round2(openingBalance + periodBilled - periodPaid);
 
   return {
-    client,
-    settings: getSettings(),
-    from, to,
-    entries, payments,
+    client, from, to,
+    entries, payments, by_day: byDay,
     opening_balance: openingBalance,
     period_billed: periodBilled,
     period_litres: periodLitres,
     period_paid: periodPaid,
     closing_balance: closingBalance,
   };
+}
+
+function clientStatement(clientId, from, to) {
+  ensureFresh();
+  return { ...statementCore(clientId, from, to), settings: getSettings() };
+}
+
+/* ---- invoices ---- */
+function listInvoices(filter = {}) {
+  ensureFresh();
+  const where = [];
+  const params = [];
+  if (filter.clientId) { where.push("i.client_id = ?"); params.push(filter.clientId); }
+  if (filter.from) { where.push("i.issued_date >= ?"); params.push(filter.from); }
+  if (filter.to) { where.push("i.issued_date <= ?"); params.push(filter.to); }
+  const clause = where.length ? "WHERE " + where.join(" AND ") : "";
+  return all(
+    `SELECT i.*, c.name AS client_name FROM invoices i JOIN clients c ON c.id = i.client_id
+     ${clause} ORDER BY i.issued_date DESC, i.id DESC LIMIT 500`,
+    params
+  );
+}
+
+/** Preview the numbers for a would-be invoice without saving it. */
+function invoicePreview(clientId, from, to) {
+  ensureFresh();
+  const core = statementCore(clientId, from, to);
+  return { ...core, settings: getSettings() };
+}
+
+/** Create + persist an invoice, assigning the next number. */
+function createInvoice(inv) {
+  const { client_id, from, to, note } = inv;
+  if (!client_id || !from || !to) throw new Error("Client and period are required.");
+  if (from > to) throw new Error("The 'from' date is after the 'to' date.");
+  return tx(() => {
+    const core = statementCore(client_id, from, to);
+    const settings = getSettings();
+    const prefix = settings.invoice_prefix || "INV-";
+    const n = bumpCounter("next_invoice_no");
+    const invoiceNo = prefix + String(n).padStart(4, "0");
+    const issued = new Date().toLocaleDateString("en-CA");
+    db.run(
+      `INSERT INTO invoices
+       (invoice_no, client_id, period_from, period_to, issued_date,
+        previous_balance, period_litres, period_billed, period_paid, total_due, note)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        invoiceNo, client_id, from, to, issued,
+        core.opening_balance, core.period_litres, core.period_billed,
+        core.period_paid, core.closing_balance, note || null,
+      ]
+    );
+    return getInvoice(lastId());
+  });
+}
+
+function getInvoice(id) {
+  ensureFresh();
+  const inv = get(
+    "SELECT i.*, c.name AS client_name, c.phone AS client_phone, c.address AS client_address FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = ?",
+    [id]
+  );
+  if (!inv) return null;
+  // Re-pull the live line items for the period so the printed invoice shows detail.
+  const core = statementCore(inv.client_id, inv.period_from, inv.period_to);
+  inv.entries = core.entries;
+  inv.payments = core.payments;
+  inv.by_day = core.by_day;
+  inv.settings = getSettings();
+  inv.client = get("SELECT * FROM clients WHERE id = ?", [inv.client_id]);
+  return inv;
+}
+
+function deleteInvoice(id) {
+  run("DELETE FROM invoices WHERE id = ?", [id]);
+  return true;
 }
 
 module.exports = {
@@ -778,5 +949,6 @@ module.exports = {
   listPayments, savePayment, deletePayment,
   listPurchases, savePurchase, deletePurchase,
   listExpenses, saveExpense, deleteExpense,
-  profitLoss, dashboard, clientStatement,
+  profitLoss, dashboard, clientStatement, dailyMilkSheet,
+  listInvoices, invoicePreview, createInvoice, getInvoice, deleteInvoice,
 };

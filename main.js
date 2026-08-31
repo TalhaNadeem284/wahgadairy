@@ -184,8 +184,14 @@ handle("expenses:delete", (id) => { requireDb(); return db.deleteExpense(id); })
 handle("reports:profitLoss", (from, to) => { requireDb(); return db.profitLoss(from, to); });
 handle("reports:dashboard", () => { requireDb(); return db.dashboard(); });
 
-/* ---------- statement ---------- */
+/* ---------- statement / sheet / invoices ---------- */
 handle("statement:get", (clientId, from, to) => { requireDb(); return db.clientStatement(clientId, from, to); });
+handle("sheet:milk", (from, to) => { requireDb(); return db.dailyMilkSheet(from, to); });
+handle("invoices:list", (filter) => { requireDb(); return db.listInvoices(filter || {}); });
+handle("invoices:preview", (clientId, from, to) => { requireDb(); return db.invoicePreview(clientId, from, to); });
+handle("invoices:create", (inv) => { requireDb(); return db.createInvoice(inv); });
+handle("invoices:get", (id) => { requireDb(); return db.getInvoice(id); });
+handle("invoices:delete", (id) => { requireDb(); return db.deleteInvoice(id); });
 
 handle("print:html", async (html) => {
   const pw = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });

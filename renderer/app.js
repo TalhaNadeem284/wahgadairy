@@ -53,6 +53,44 @@ function money2(n) {
 function litres(n) { return (Number(n) || 0).toLocaleString("en-PK", { maximumFractionDigits: 2 }) + " L"; }
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 function monthStartStr() { const d = new Date(); return d.toLocaleDateString("en-CA").slice(0, 8) + "01"; }
+const iso = (d) => d.toLocaleDateString("en-CA");
+function addDays(base, n) { const d = new Date(base); d.setDate(d.getDate() + n); return d; }
+
+/** Named billing periods. Returns { from, to } as YYYY-MM-DD. */
+function period(name) {
+  const now = new Date();
+  const t = iso(now);
+  switch (name) {
+    case "last7": return { from: iso(addDays(now, -6)), to: t };
+    case "last10": return { from: iso(addDays(now, -9)), to: t };
+    case "last15": return { from: iso(addDays(now, -14)), to: t };
+    case "thisweek": {
+      const day = (now.getDay() + 6) % 7; // Monday = 0
+      return { from: iso(addDays(now, -day)), to: t };
+    }
+    case "lastweek": {
+      const day = (now.getDay() + 6) % 7;
+      const monThis = addDays(now, -day);
+      return { from: iso(addDays(monThis, -7)), to: iso(addDays(monThis, -1)) };
+    }
+    case "thismonth": return { from: monthStartStr(), to: t };
+    case "lastmonth": {
+      const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0");
+      const last = new Date(y, d.getMonth() + 1, 0).getDate();
+      return { from: `${y}-${m}-01`, to: `${y}-${m}-${String(last).padStart(2, "0")}` };
+    }
+    default: return { from: monthStartStr(), to: t };
+  }
+}
+const PERIOD_PRESETS = [
+  ["thisweek", "This week"],
+  ["last7", "Last 7 days"],
+  ["last10", "Last 10 days"],
+  ["last15", "Last 15 days"],
+  ["thismonth", "This month"],
+  ["lastmonth", "Last month"],
+];
 function titleCase(s) { return String(s || "").replace(/\b\w/g, (c) => c.toUpperCase()); }
 
 function confirmBox(message) {
@@ -91,7 +129,7 @@ const NAV = [
   { id: "purchases", label: "Purchases", icon: "🚚" },
   { id: "expenses", label: "Expenses", icon: "🧾" },
   { id: "pl", label: "Profit & Loss", icon: "📊" },
-  { id: "statements", label: "Statements", icon: "📄" },
+  { id: "billing", label: "Invoices & Statements", icon: "📄" },
   { id: "settings", label: "Settings", icon: "⚙️" },
 ];
 
@@ -263,7 +301,7 @@ VIEWS.dashboard = async (main) => {
     el("h2", { text: "Quick actions" }),
     el("div", { class: "row", style: "margin-top:12px" }, [
       el("button", { class: "btn", onclick: () => go("daily") }, "📝  Enter today's round"),
-      el("button", { class: "btn secondary", onclick: () => go("statements") }, "📄  Make a client statement"),
+      el("button", { class: "btn secondary", onclick: () => go("billing") }, "📄  Make an invoice"),
       el("button", { class: "btn secondary", onclick: () => go("pl") }, "📊  View profit & loss"),
     ]),
   ]));
@@ -449,7 +487,10 @@ async function clientDrawer(id) {
     ]));
     const payBox = el("div", { style: "margin-top:10px" });
     drawer.append(payBox);
-    drawer.append(el("button", { class: "btn secondary", style: "margin-top:14px", onclick: () => { close(); go("statements", { clientId: client.id }); } }, "📄  Open statement for this client"));
+    drawer.append(el("div", { class: "row", style: "margin-top:14px" }, [
+      el("button", { class: "btn secondary", onclick: () => { close(); go("billing", { tab: "invoice", clientId: client.id }); } }, "🧾  Invoice this client"),
+      el("button", { class: "btn secondary", onclick: () => { close(); go("billing", { tab: "statement", clientId: client.id }); } }, "📄  Statement"),
+    ]));
     async function refreshPayments() {
       const pays = await rpc(A.paymentsList({ clientId: client.id }));
       payBox.innerHTML = "";
@@ -494,7 +535,7 @@ function paymentModal(clientId, payment, onDone) {
   const amtI = input({ type: "number", min: "0", step: "1", value: payment?.amount || "", placeholder: "e.g. 5000" });
   const methodI = selectBox(META.paymentMethods, payment?.method || "cash");
   const noteI = input({ value: payment?.note || "", placeholder: "Optional" });
-  box.append(el("h2", { text: payment ? "Edit payment" : "Record payment" }));
+  box.append(el("h2", { text: payment?.id ? "Edit payment" : "Record payment" }));
   box.append(field("Date", dateI));
   box.append(field("Amount (" + currency() + ")", amtI));
   box.append(field("Method", methodI));
@@ -617,13 +658,37 @@ VIEWS.purchases = async (main) => {
   } }, "Add purchase"));
   main.append(formCard);
 
-  const filterRow = dateRangeControls(state.from, state.to, (f, t) => { state.from = f; state.to = t; load(); });
-  filterRow.style.marginTop = "18px";
-  main.append(filterRow);
+  // ---- section switch: individual purchases  |  daily sheet ----
+  const sec = { v: "sheet" };
+  const seg = segmented([["sheet", "Daily purchase sheet"], ["list", "All purchases"]], sec.v, (v) => { sec.v = v; render(); });
+  seg.style.margin = "20px 0 12px";
+  main.append(seg);
+
+  const filterWrap = el("div");
+  main.append(filterWrap);
   const container = el("div", { style: "margin-top:12px" });
   main.append(container);
 
-  async function load() {
+  function render() {
+    filterWrap.innerHTML = "";
+    if (sec.v === "list") {
+      state.from = state.from || ""; state.to = state.to || "";
+      const fr = dateRangeControls(state.from, state.to, (f, t) => { state.from = f; state.to = t; loadList(); });
+      filterWrap.append(fr);
+      loadList();
+    } else {
+      if (!state.sfrom) { const p = period("thismonth"); state.sfrom = p.from; state.sto = p.to; }
+      const fr = el("div", { class: "row" }, [
+        dateRangeControls(state.sfrom, state.sto, (f, t) => { state.sfrom = f; state.sto = t; loadSheet(); }),
+        el("button", { class: "btn secondary sm", onclick: () => { const p = period("thismonth"); state.sfrom = p.from; state.sto = p.to; render(); } }, "This month"),
+        el("button", { class: "btn secondary sm", onclick: () => { const p = period("lastmonth"); state.sfrom = p.from; state.sto = p.to; render(); } }, "Last month"),
+      ]);
+      filterWrap.append(fr);
+      loadSheet();
+    }
+  }
+
+  async function loadList() {
     container.innerHTML = "<div class='spin'>Loading…</div>";
     const rows = await rpc(A.purchasesList({ from: state.from || undefined, to: state.to || undefined }));
     const totC = rows.reduce((a, r) => a + r.total_cost, 0);
@@ -635,14 +700,89 @@ VIEWS.purchases = async (main) => {
       { header: currency() + "/L", num: true, render: (r) => money(r.price_per_litre) },
       { header: "Total cost", num: true, render: (r) => el("strong", { text: money(r.total_cost) }) },
       { header: "Notes", key: "supplier_notes" },
-      { header: "", render: (r) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this purchase?")) { await rpc(A.purchaseDelete(r.id)); toast("Deleted", "ok"); load(); } } }, "✕") },
+      { header: "", render: (r) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this purchase?")) { await rpc(A.purchaseDelete(r.id)); toast("Deleted", "ok"); loadList(); } } }, "✕") },
     ], rows, {
       footer: [{ text: "Total" }, { text: litres(totL), num: true }, { text: "" }, { text: money(totC), num: true }, { text: "" }, { text: "" }],
       empty: "No purchases recorded.",
     }));
   }
-  await load();
+
+  async function loadSheet() {
+    container.innerHTML = "<div class='spin'>Building sheet…</div>";
+    const s = await rpc(A.dailyMilkSheet(state.sfrom, state.sto));
+    container.innerHTML = "";
+    container.append(el("div", { class: "row", style: "margin-bottom:12px" }, [
+      el("button", { class: "btn secondary", onclick: () => rpc(A.printHtml(purchaseSheetHtml(s))).catch((e) => toast(e.message, "err")) }, "🖨  Print sheet"),
+      el("button", { class: "btn secondary", onclick: async () => { const r = await rpc(A.savePdf(purchaseSheetHtml(s), `milk-purchase-sheet-${s.from}-to-${s.to}`)); if (!r.canceled) toast("Saved: " + r.path, "ok"); } }, "⬇  Save as PDF"),
+    ]));
+    container.append(el("div", { class: "kpis", style: "margin-bottom:14px" }, [
+      kpi("Milk purchased", litres(s.totals.purchased_litres)),
+      kpi("Purchase cost", money(s.totals.purchased_cost), "bad"),
+      kpi("Avg rate / litre", money2(s.totals.avg_rate)),
+      kpi("Milk delivered", litres(s.totals.delivered_litres)),
+      kpi("Purchased − delivered", litres(s.totals.difference_litres), s.totals.difference_litres < 0 ? "bad" : ""),
+    ]));
+    container.append(dataTable([
+      { header: "Date", key: "date" },
+      { header: "Purchased", num: true, render: (r) => litres(r.purchased_litres) },
+      { header: "Rate", num: true, render: (r) => (r.avg_rate ? money2(r.avg_rate) : "—") },
+      { header: "Cost", num: true, render: (r) => money(r.purchased_cost) },
+      { header: "Delivered", num: true, render: (r) => litres(r.delivered_litres) },
+      { header: "Diff", num: true, render: (r) => litres(r.difference_litres) },
+    ], s.rows, {
+      footer: [
+        { text: "Total" },
+        { text: litres(s.totals.purchased_litres), num: true },
+        { text: money2(s.totals.avg_rate), num: true },
+        { text: money(s.totals.purchased_cost), num: true },
+        { text: litres(s.totals.delivered_litres), num: true },
+        { text: litres(s.totals.difference_litres), num: true },
+      ],
+      empty: "No milk purchased or delivered in this period.",
+    }));
+  }
+
+  render();
 };
+
+function segmented(options, value, onChange) {
+  const wrap = el("div", { class: "row", style: "gap:6px" });
+  for (const [v, label] of options) {
+    wrap.append(el("button", {
+      class: "btn sm " + (v === value ? "" : "secondary"),
+      onclick: () => onChange(v),
+    }, label));
+  }
+  return wrap;
+}
+
+function purchaseSheetHtml(s) {
+  const cur = s.settings.currency || "Rs";
+  const m = (n) => cur + " " + (Number(n) || 0).toLocaleString("en-PK", { maximumFractionDigits: 0 });
+  const L = (n) => (Number(n) || 0).toLocaleString("en-PK", { maximumFractionDigits: 2 });
+  const rows = s.rows.map((r) => `<tr>
+    <td>${esc(r.date)}</td><td class="r">${L(r.purchased_litres)}</td>
+    <td class="r">${r.avg_rate ? m(r.avg_rate) : "—"}</td><td class="r">${m(r.purchased_cost)}</td>
+    <td class="r">${L(r.delivered_litres)}</td><td class="r">${L(r.difference_litres)}</td></tr>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Milk Purchase Sheet ${esc(s.from)} — ${esc(s.to)}</title>
+  <style>${STATEMENT_CSS} body{margin:0;background:#fff} @media print{.sheet{box-shadow:none;margin:0}}</style></head>
+  <body><div class="sheet">
+    <div class="hd">
+      <div><h1>${esc(s.settings.shop_name || "Wahga Dairy Farm")}</h1>
+      <div class="muted">${esc(s.settings.shop_address || "")}</div></div>
+      <div class="ttl"><div class="big">MILK PURCHASE SHEET</div>
+      <div class="muted">${esc(s.from)} &nbsp;to&nbsp; ${esc(s.to)}</div></div>
+    </div>
+    <table>
+      <thead><tr><th>Date</th><th class="r">Purchased (L)</th><th class="r">Rate</th><th class="r">Cost</th><th class="r">Delivered (L)</th><th class="r">Diff (L)</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="6" class="muted c">Nothing recorded for this period</td></tr>`}</tbody>
+      <tfoot><tr class="grand">
+        <td>TOTAL</td><td class="r">${L(s.totals.purchased_litres)}</td><td class="r">${m(s.totals.avg_rate)}</td>
+        <td class="r">${m(s.totals.purchased_cost)}</td><td class="r">${L(s.totals.delivered_litres)}</td><td class="r">${L(s.totals.difference_litres)}</td>
+      </tr></tfoot>
+    </table>
+  </div></body></html>`;
+}
 
 /* ---- expenses ---- */
 VIEWS.expenses = async (main) => {
@@ -754,67 +894,241 @@ VIEWS.pl = async (main) => {
   await load();
 };
 
-/* ---- statements ---- */
-VIEWS.statements = async (main, params) => {
+/* ---- billing: invoices + statement + history ---- */
+VIEWS.billing = async (main, params) => {
   const clients = await rpc(A.clientsList(true));
-  const state = {
-    clientId: params.clientId || clients[0]?.id || "",
-    from: params.from || monthStartStr(),
-    to: params.to || todayStr(),
-  };
   main.innerHTML = "";
-  main.append(pageHead("Client Statements", "Make a monthly bill to print or save as PDF and send on WhatsApp."));
+  main.append(pageHead("Invoices & Statements", "Bill any client for any period — a week, 10 days, a month — print or save a PDF for WhatsApp."));
   if (!clients.length) { main.append(el("div", { class: "card", text: "Add a client first." })); return; }
 
-  const clientSel = selectBox(clients.map((c) => ({ value: c.id, label: c.name })), state.clientId);
-  clientSel.addEventListener("change", () => { state.clientId = clientSel.value; load(); });
-  main.append(el("div", { class: "row", style: "margin-bottom:14px" }, [
-    field("Client", clientSel),
-    dateRangeControls(state.from, state.to, (f, t) => { state.from = f; state.to = t; load(); }),
-    el("button", { class: "btn secondary", onclick: () => setMonth(0) }, "This month"),
-    el("button", { class: "btn secondary", onclick: () => setMonth(-1) }, "Last month"),
-  ]));
-  const preview = el("div");
-  main.append(preview);
+  const tab = { v: params.tab || "invoice" };
+  const seg = segmented([["invoice", "New invoice"], ["statement", "Statement"], ["history", "Invoice history"]], tab.v, (v) => { tab.v = v; render(); });
+  seg.style.marginBottom = "16px";
+  main.append(seg);
+  const body = el("div");
+  main.append(body);
 
-  function setMonth(offset) {
-    const d = new Date();
-    d.setMonth(d.getMonth() + offset, 1);
-    const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0");
-    const last = new Date(y, d.getMonth() + 1, 0).getDate();
-    go("statements", {
-      clientId: state.clientId,
-      from: `${y}-${m}-01`,
-      to: `${y}-${m}-${String(last).padStart(2, "0")}`,
-    });
+  function render() {
+    body.innerHTML = "";
+    if (tab.v === "invoice") invoiceMaker(body, clients, params);
+    else if (tab.v === "statement") statementMaker(body, clients, params);
+    else invoiceHistory(body, clients);
   }
+  render();
+};
+
+function periodPresetRow(state, onChange) {
+  return el("div", { class: "row", style: "gap:6px;margin-top:6px" },
+    PERIOD_PRESETS.map(([k, label]) => el("button", {
+      class: "btn sm secondary",
+      onclick: () => { const p = period(k); state.from = p.from; state.to = p.to; onChange(); },
+    }, label))
+  );
+}
+
+async function invoiceMaker(root, clients, params) {
+  const state = {
+    clientId: params.clientId || clients[0]?.id || "",
+    ...period("thismonth"),
+    note: "",
+  };
+  const clientSel = selectBox(clients.map((c) => ({ value: c.id, label: c.name })), state.clientId);
+  const fromI = input({ type: "date", value: state.from });
+  const toI = input({ type: "date", value: state.to });
+  const noteI = input({ placeholder: "Optional note on the invoice" });
+  clientSel.addEventListener("change", () => { state.clientId = clientSel.value; load(); });
+  fromI.addEventListener("change", () => { state.from = fromI.value; load(); });
+  toI.addEventListener("change", () => { state.to = toI.value; load(); });
+  noteI.addEventListener("input", () => { state.note = noteI.value; });
+
+  const controls = el("div", { class: "card" }, [
+    el("div", { class: "row" }, [field("Client", clientSel), field("From", fromI), field("To", toI), field("Note", noteI)]),
+    periodPresetRow(state, () => { fromI.value = state.from; toI.value = state.to; load(); }),
+  ]);
+  root.append(controls);
+  const preview = el("div", { style: "margin-top:16px" });
+  root.append(preview);
+
+  async function load() {
+    preview.innerHTML = "<div class='spin'>Building…</div>";
+    const s = await rpc(A.invoicePreview(Number(state.clientId), state.from, state.to));
+    const draft = toInvoiceShape(s, { invoice_no: (s.settings.invoice_prefix || "INV-") + "XXXX", issued_date: todayStr(), note: state.note });
+    preview.innerHTML = "";
+    preview.append(el("div", { class: "row between", style: "margin-bottom:12px" }, [
+      el("div", { class: "mini", text: "Total due: " + money(s.closing_balance) }),
+      el("div", { class: "row" }, [
+        el("button", { class: "btn", onclick: issue }, "✓  Issue invoice"),
+        el("button", { class: "btn secondary", onclick: () => rpc(A.printHtml(invoiceHtml(draft))).catch((e) => toast(e.message, "err")) }, "🖨  Print (without saving)"),
+      ]),
+    ]));
+    preview.append(el("div", { class: "inline-note", text: "“Issue invoice” assigns a number, saves it to Invoice history, then lets you print / save the PDF." }));
+    const frame = el("div", { class: "card", style: "padding:0;overflow:hidden;margin-top:12px" });
+    frame.append(el("div", { html: invoiceHtml(draft, { embedded: true }) }));
+    preview.append(frame);
+
+    async function issue() {
+      try {
+        const inv = await rpc(A.invoiceCreate({ client_id: Number(state.clientId), from: state.from, to: state.to, note: state.note }));
+        toast("Invoice " + inv.invoice_no + " issued", "ok");
+        openInvoiceView(inv);
+      } catch (e) { toast(e.message, "err"); }
+    }
+  }
+  await load();
+}
+
+async function statementMaker(root, clients, params) {
+  const state = {
+    clientId: params.clientId || clients[0]?.id || "",
+    ...period("thismonth"),
+  };
+  const clientSel = selectBox(clients.map((c) => ({ value: c.id, label: c.name })), state.clientId);
+  const fromI = input({ type: "date", value: state.from });
+  const toI = input({ type: "date", value: state.to });
+  clientSel.addEventListener("change", () => { state.clientId = clientSel.value; load(); });
+  fromI.addEventListener("change", () => { state.from = fromI.value; load(); });
+  toI.addEventListener("change", () => { state.to = toI.value; load(); });
+
+  root.append(el("div", { class: "card" }, [
+    el("div", { class: "row" }, [field("Client", clientSel), field("From", fromI), field("To", toI)]),
+    periodPresetRow(state, () => { fromI.value = state.from; toI.value = state.to; load(); }),
+  ]));
+  const preview = el("div", { style: "margin-top:16px" });
+  root.append(preview);
 
   async function load() {
     preview.innerHTML = "<div class='spin'>Building…</div>";
     const s = await rpc(A.statement(Number(state.clientId), state.from, state.to));
     preview.innerHTML = "";
     preview.append(el("div", { class: "row", style: "margin-bottom:12px" }, [
-      el("button", { class: "btn", onclick: () => doPrint(s) }, "🖨  Print"),
-      el("button", { class: "btn secondary", onclick: () => doPdf(s) }, "⬇  Save as PDF"),
+      el("button", { class: "btn", onclick: () => rpc(A.printHtml(statementHtml(s))).catch((e) => toast(e.message, "err")) }, "🖨  Print"),
+      el("button", { class: "btn secondary", onclick: async () => {
+        const r = await rpc(A.savePdf(statementHtml(s), `${s.client.name.replace(/[^\w]+/g, "-")}-statement-${s.from}-to-${s.to}`));
+        if (!r.canceled) toast("Saved: " + r.path, "ok");
+      } }, "⬇  Save as PDF"),
     ]));
     const frame = el("div", { class: "card", style: "padding:0;overflow:hidden" });
     frame.append(el("div", { html: statementHtml(s, { embedded: true }) }));
     preview.append(frame);
   }
   await load();
+}
 
-  async function doPrint(s) {
-    try { await rpc(A.statementPrint(statementHtml(s))); }
-    catch (e) { toast(e.message, "err"); }
+async function invoiceHistory(root, clients) {
+  const filterSel = selectBox([{ value: "", label: "All clients" }, ...clients.map((c) => ({ value: c.id, label: c.name }))], "");
+  const state = { clientId: "" };
+  filterSel.addEventListener("change", () => { state.clientId = filterSel.value; load(); });
+  root.append(el("div", { class: "row", style: "margin-bottom:12px" }, [field("Client", filterSel)]));
+  const container = el("div");
+  root.append(container);
+
+  async function load() {
+    container.innerHTML = "<div class='spin'>Loading…</div>";
+    const rows = await rpc(A.invoicesList({ clientId: state.clientId || undefined }));
+    container.innerHTML = "";
+    container.append(dataTable([
+      { header: "Invoice", key: "invoice_no" },
+      { header: "Client", key: "client_name" },
+      { header: "Period", render: (r) => r.period_from + " → " + r.period_to },
+      { header: "Issued", key: "issued_date" },
+      { header: "Total due", num: true, render: (r) => el("strong", { text: money(r.total_due) }) },
+      { header: "", render: (r) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete invoice " + r.invoice_no + "? (Deliveries and payments are not affected.)")) { await rpc(A.invoiceDelete(r.id)); toast("Deleted", "ok"); load(); } } }, "✕") },
+    ], rows, {
+      onRowClick: async (r) => openInvoiceView(await rpc(A.invoiceGet(r.id))),
+      empty: "No invoices issued yet.",
+    }));
   }
-  async function doPdf(s) {
-    try {
-      const name = `${s.client.name.replace(/[^\w]+/g, "-")}-${s.from}-to-${s.to}`;
-      const r = await rpc(A.statementPdf(statementHtml(s), name));
-      if (!r.canceled) toast("Saved: " + r.path, "ok");
-    } catch (e) { toast(e.message, "err"); }
-  }
-};
+  await load();
+}
+
+function toInvoiceShape(s, extra) {
+  return {
+    invoice_no: extra.invoice_no,
+    issued_date: extra.issued_date,
+    period_from: s.from, period_to: s.to,
+    previous_balance: s.opening_balance,
+    period_litres: s.period_litres,
+    period_billed: s.period_billed,
+    period_paid: s.period_paid,
+    total_due: s.closing_balance,
+    note: extra.note || null,
+    client: s.client, settings: s.settings,
+    entries: s.entries, payments: s.payments, by_day: s.by_day,
+  };
+}
+
+function openInvoiceView(inv) {
+  const box = el("div", { class: "modal", style: "width:820px" });
+  box.append(el("div", { class: "row between", style: "margin-bottom:12px" }, [
+    el("h2", { text: "Invoice " + inv.invoice_no, style: "margin:0" }),
+    el("div", { class: "row" }, [
+      el("button", { class: "btn", onclick: () => rpc(A.printHtml(invoiceHtml(inv))).catch((e) => toast(e.message, "err")) }, "🖨  Print"),
+      el("button", { class: "btn secondary", onclick: async () => {
+        const r = await rpc(A.savePdf(invoiceHtml(inv), `${(inv.client.name || "client").replace(/[^\w]+/g, "-")}-${inv.invoice_no}`));
+        if (!r.canceled) toast("Saved: " + r.path, "ok");
+      } }, "⬇  Save PDF"),
+      el("button", { class: "btn secondary", onclick: () => { closeV(); paymentModal(inv.client_id || inv.client.id, { amount: inv.total_due, note: inv.invoice_no }, () => toast("Payment recorded", "ok")); } }, "Mark paid"),
+    ]),
+  ]));
+  const frame = el("div", { class: "card", style: "padding:0;overflow:hidden" });
+  frame.append(el("div", { html: invoiceHtml(inv, { embedded: true }) }));
+  box.append(frame);
+  box.append(el("div", { class: "drawer-actions" }, [el("button", { class: "btn ghost", onclick: () => closeV() }, "Close")]));
+  const closeV = openOverlay(box, { center: true });
+}
+
+function invoiceHtml(inv, { embedded = false } = {}) {
+  const st = inv.settings || {};
+  const cur = st.currency || "Rs";
+  const m = (n) => cur + " " + (Number(n) || 0).toLocaleString("en-PK", { maximumFractionDigits: 2 });
+  const L = (n) => (Number(n) || 0).toLocaleString("en-PK", { maximumFractionDigits: 2 });
+  const dayRows = (inv.by_day || []).map((d) => `
+    <tr><td>${esc(d.date)}</td><td class="r">${L(d.litres)}</td><td class="r">${m(d.amount)}</td></tr>`).join("");
+  const payLine = inv.period_paid
+    ? `<tr><td colspan="2">Payments received in this period</td><td class="r">− ${m(inv.period_paid)}</td></tr>` : "";
+  const prevLine = inv.previous_balance
+    ? `<tr><td colspan="2">Previous balance</td><td class="r">${m(inv.previous_balance)}</td></tr>` : "";
+
+  const body = `
+  <div class="sheet">
+    <div class="hd">
+      <div>
+        <h1>${esc(st.shop_name || "Wahga Dairy Farm")}</h1>
+        <div class="muted">${esc(st.shop_address || "")}</div>
+        <div class="muted">${esc(st.shop_phone || "")}</div>
+      </div>
+      <div class="ttl">
+        <div class="big">INVOICE</div>
+        <div class="muted">${esc(inv.invoice_no)}</div>
+        <div class="muted">Issued ${esc(inv.issued_date)}</div>
+      </div>
+    </div>
+    <div class="to">
+      <strong>Bill to: ${esc(inv.client.name)}</strong><br/>
+      ${esc(inv.client.phone || "")}${inv.client.phone && inv.client.address ? " · " : ""}${esc(inv.client.address || "")}<br/>
+      <span class="muted">Period: ${esc(inv.period_from)} to ${esc(inv.period_to)}</span>
+    </div>
+    <table>
+      <thead><tr><th>Date</th><th class="r">Litres</th><th class="r">Amount</th></tr></thead>
+      <tbody>
+        ${dayRows || `<tr><td colspan="3" class="muted c">No deliveries in this period</td></tr>`}
+      </tbody>
+      <tfoot>
+        <tr><td colspan="2">Milk delivered this period (${L(inv.period_litres)} L)</td><td class="r">${m(inv.period_billed)}</td></tr>
+        ${prevLine}
+        ${payLine}
+        <tr class="grand"><td colspan="2">TOTAL DUE</td><td class="r">${m(inv.total_due)}</td></tr>
+      </tfoot>
+    </table>
+    ${inv.note ? `<p class="muted">${esc(inv.note)}</p>` : ""}
+    <div class="ft muted">${esc(st.statement_footer || "")}</div>
+  </div>`;
+
+  if (embedded) return `<style>${STATEMENT_CSS}</style>${body}`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${esc(inv.invoice_no)} — ${esc(inv.client.name)}</title>
+  <style>${STATEMENT_CSS} body{margin:0;background:#fff} @media print{.sheet{box-shadow:none;margin:0}}</style></head>
+  <body>${body}</body></html>`;
+}
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -905,19 +1219,24 @@ VIEWS.settings = async (main) => {
   const phoneI = input({ value: s.shop_phone || "" });
   const curI = input({ value: s.currency || "Rs", style: "width:90px" });
   const footI = input({ value: s.statement_footer || "" });
+  const prefixI = input({ value: s.invoice_prefix || "INV-", style: "width:120px" });
+  const nextNoI = input({ type: "number", min: "1", value: s.next_invoice_no || "1", style: "width:120px" });
 
   const shopCard = el("div", { class: "card" }, [
     el("h2", { text: "Shop / farm details" }),
-    el("div", { class: "sub", text: "Shown at the top of every printed statement." }),
+    el("div", { class: "sub", text: "Shown at the top of every printed statement and invoice." }),
     el("div", { class: "stack" }, [
       field("Name", nameI), field("Address", addrI), field("Phone", phoneI),
-      field("Currency label", curI), field("Statement footer line", footI),
+      field("Currency label", curI), field("Statement / invoice footer line", footI),
+      el("div", { class: "row" }, [field("Invoice number prefix", prefixI), field("Next invoice number", nextNoI)]),
     ]),
     el("button", { class: "btn", style: "margin-top:14px", onclick: async () => {
       try {
         SETTINGS = await rpc(A.settingsSave({
           shop_name: nameI.value, shop_address: addrI.value, shop_phone: phoneI.value,
           currency: curI.value || "Rs", statement_footer: footI.value,
+          invoice_prefix: prefixI.value || "INV-",
+          next_invoice_no: String(Math.max(1, parseInt(nextNoI.value, 10) || 1)),
         }));
         toast("Saved", "ok");
       } catch (e) { toast(e.message, "err"); }
