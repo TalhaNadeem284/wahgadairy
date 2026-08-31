@@ -44,11 +44,11 @@ backup copy, or point this PC at a different folder/file later.
 | Daily Entry | one row per active client for a chosen date — type litres, save the whole round at once |
 | Clients | name, phone, price/litre, milk category, opening balance, running balance; per-client payments |
 | Milk Entries | full delivery log, filter by date/client, edit or delete |
-| Purchases | bulk milk bought from suppliers (your cost of goods) |
+| Purchases | record purchases; **Daily purchase sheet** tab = day-by-day litres & cost of milk bought vs delivered, printable / PDF |
 | Expenses | petrol, salary, feed, etc. with category filter |
 | Profit & Loss | date range: revenue − milk cost − expenses, by-category breakdown, day-by-day table |
-| Statements | pick a client + month → preview → Print or Save as PDF (for WhatsApp) |
-| Settings | shop details for the statement header, database location, backup |
+| Invoices & Statements | bill any client for any period — this week, last 7 / 10 / 15 days, this/last month, or custom. **New invoice** (numbered, day-by-day, previous balance + payments + total due), **Statement** (full running ledger), **Invoice history** (re-open / print / delete). Print or Save as PDF for WhatsApp; "Mark paid" records the payment. |
+| Settings | shop details for the header, invoice number prefix + next number, database location, backup |
 
 ## Data model (SQLite)
 `settings`, `clients`, `milk_entries` (one per client+date+category, price
