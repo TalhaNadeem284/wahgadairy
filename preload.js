@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld("api", {
   paymentsList: (filter) => invoke("payments:list", filter),
   paymentSave: (p) => invoke("payments:save", p),
   paymentDelete: (id) => invoke("payments:delete", id),
+  settlements: (opts) => invoke("settlements:get", opts),
 
   purchasesList: (filter) => invoke("purchases:list", filter),
   purchaseSave: (p) => invoke("purchases:save", p),

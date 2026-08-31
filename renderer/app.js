@@ -126,6 +126,7 @@ const NAV = [
   { id: "dashboard", label: "Dashboard", icon: "🏠" },
   { id: "daily", label: "Daily Entry", icon: "📝" },
   { id: "clients", label: "Clients", icon: "👥" },
+  { id: "settlements", label: "Settlements", icon: "💰" },
   { id: "entries", label: "Milk Entries", icon: "🥛" },
   { id: "purchases", label: "Purchases", icon: "🚚" },
   { id: "expenses", label: "Expenses", icon: "🧾" },
@@ -668,6 +669,95 @@ async function paymentModal(clientId, payment, onDone) {
     baseBalance > 0 ? el("button", { class: "btn secondary", onclick: () => { amtI.value = String(Math.round(baseBalance)); recalc(); } }, "Pay full " + money(baseBalance)) : null,
     el("button", { class: "btn ghost", onclick: close }, "Cancel"),
   ]));
+}
+
+/* ---- settlements (who owes what) ---- */
+VIEWS.settlements = async (main) => {
+  const opts = { hideSettled: true, sort: "pending" };
+  main.innerHTML = "";
+  main.append(pageHead("Settlements", "What each client has been billed, what they've paid, and what's still pending."));
+  const bar = el("div", { class: "row", style: "margin-bottom:14px" });
+  main.append(bar);
+  const container = el("div");
+  main.append(container);
+
+  async function load() {
+    container.innerHTML = "<div class='spin'>Loading…</div>";
+    const s = await rpc(A.settlements({}));
+    let rows = s.rows.slice();
+    if (opts.hideSettled) rows = rows.filter((r) => r.pending > 0.5);
+    if (opts.sort === "pending") rows.sort((a, b) => b.pending - a.pending);
+    else rows.sort((a, b) => a.name.localeCompare(b.name));
+
+    bar.innerHTML = "";
+    const hide = input({ type: "checkbox" }); hide.checked = opts.hideSettled;
+    hide.addEventListener("change", () => { opts.hideSettled = hide.checked; load(); });
+    const sortSel = selectBox([{ value: "pending", label: "Most pending first" }, { value: "name", label: "By name" }], opts.sort);
+    sortSel.addEventListener("change", () => { opts.sort = sortSel.value; load(); });
+    bar.append(
+      el("label", { class: "row", style: "gap:6px;font-size:12.5px;color:var(--muted)" }, [hide, "Hide fully settled"]),
+      field("Sort", sortSel),
+      el("div", { class: "grow" }),
+      el("button", { class: "btn secondary", onclick: () => rpc(A.printHtml(settlementHtml(s))).catch((e) => toast(e.message, "err")) }, "🖨  Print"),
+      el("button", { class: "btn secondary", onclick: async () => { const r = await rpc(A.savePdf(settlementHtml(s), `settlements-${s.generated}`)); if (!r.canceled) toast("Saved: " + r.path, "ok"); } }, "⬇  Save PDF"),
+    );
+
+    container.innerHTML = "";
+    container.append(el("div", { class: "kpis", style: "margin-bottom:14px" }, [
+      kpi("Total billed", money(s.totals.billed)),
+      kpi("Total received", money(s.totals.received), "good"),
+      kpi("Total pending", money(s.totals.pending), s.totals.pending > 0 ? "bad" : "good"),
+      kpi("Clients with dues", String(s.rows.filter((r) => r.pending > 0.5).length)),
+    ]));
+    container.append(dataTable([
+      { header: "Client", render: (r) => el("strong", { text: r.name }) },
+      { header: "Phone", key: "phone" },
+      { header: "Billed", num: true, render: (r) => money(r.billed) },
+      { header: "Received", num: true, render: (r) => money(r.received) },
+      { header: "Pending", num: true, render: (r) => el("span", { class: r.pending > 0.5 ? "badge red" : "badge green", text: money(r.pending) }) },
+      { header: "Last paid", render: (r) => r.last_payment || "—" },
+      { header: "", render: (r) => el("button", { class: "btn sm secondary", onclick: (e) => { e.stopPropagation(); paymentModal(r.id, null, load); } }, "💵 Receive") },
+    ], rows, {
+      onRowClick: (r) => clientDrawer(r.id),
+      footer: [
+        { text: `${rows.length} clients` }, { text: "" },
+        { text: money(rows.reduce((a, r) => a + r.billed, 0)), num: true },
+        { text: money(rows.reduce((a, r) => a + r.received, 0)), num: true },
+        { text: money(rows.reduce((a, r) => a + r.pending, 0)), num: true },
+        { text: "" }, { text: "" },
+      ],
+      empty: opts.hideSettled ? "Everyone is settled up 🎉" : "No clients yet.",
+    }));
+  }
+  await load();
+};
+
+function settlementHtml(s) {
+  const cur = s.settings.currency || "Rs";
+  const m = (n) => cur + " " + (Number(n) || 0).toLocaleString("en-PK", { maximumFractionDigits: 0 });
+  const rows = s.rows
+    .filter((r) => r.pending > 0.5 || r.received > 0 || r.billed > 0)
+    .sort((a, b) => b.pending - a.pending);
+  const body = rows.map((r, i) => `<tr>
+    <td>${i + 1}</td><td>${esc(r.name)}</td><td>${esc(r.phone)}</td>
+    <td class="r">${m(r.billed)}</td><td class="r">${m(r.received)}</td>
+    <td class="r"><strong>${m(r.pending)}</strong></td></tr>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Settlements — ${esc(s.generated)}</title>
+  <style>${STATEMENT_CSS} body{margin:0;background:#fff} @media print{.sheet{box-shadow:none;margin:0}}</style></head>
+  <body><div class="sheet">
+    <div class="hd">
+      <div><h1>${esc(s.settings.shop_name || "Wahga Dairy Farm")}</h1>
+      <div class="muted">${esc(s.settings.shop_address || "")}</div></div>
+      <div class="ttl"><div class="big">SETTLEMENTS</div><div class="muted">As of ${esc(s.generated)}</div></div>
+    </div>
+    <table>
+      <thead><tr><th>#</th><th>Client</th><th>Phone</th><th class="r">Billed</th><th class="r">Received</th><th class="r">Pending</th></tr></thead>
+      <tbody>${body || `<tr><td colspan="6" class="muted c">Nothing to show</td></tr>`}</tbody>
+      <tfoot><tr class="grand">
+        <td colspan="3">TOTAL</td><td class="r">${m(s.totals.billed)}</td><td class="r">${m(s.totals.received)}</td><td class="r">${m(s.totals.pending)}</td>
+      </tr></tfoot>
+    </table>
+  </div></body></html>`;
 }
 
 /* ---- milk entries log ---- */

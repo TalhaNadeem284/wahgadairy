@@ -414,6 +414,43 @@ function listClients(includeInactive) {
   );
   return rows.map((c) => ({ ...c, balance: clientBalance(c.id) }));
 }
+
+/**
+ * Settlement sheet — one row per client: total billed (opening balance + all
+ * deliveries), total received (all payments), and what's still pending.
+ * Mirrors the "BILL" tab of the owner's spreadsheet.
+ */
+function settlements(opts = {}) {
+  ensureFresh();
+  const clients = all(
+    `SELECT * FROM clients ${opts.includeInactive ? "" : "WHERE active = 1"} ORDER BY name COLLATE NOCASE`
+  );
+  const rows = clients.map((c) => {
+    const billed = round2(
+      c.opening_balance +
+      get("SELECT COALESCE(SUM(total_amount),0) t FROM milk_entries WHERE client_id = ?", [c.id]).t
+    );
+    const received = round2(get("SELECT COALESCE(SUM(amount),0) t FROM payments WHERE client_id = ?", [c.id]).t);
+    const lastPayment = get("SELECT MAX(date) d FROM payments WHERE client_id = ?", [c.id]).d || null;
+    return {
+      id: c.id, name: c.name, phone: c.phone || "",
+      opening_balance: round2(c.opening_balance),
+      billed, received, pending: round2(billed - received),
+      last_payment: lastPayment,
+      active: !!c.active,
+    };
+  });
+  const totals = rows.reduce(
+    (a, r) => ({
+      opening_balance: round2(a.opening_balance + r.opening_balance),
+      billed: round2(a.billed + r.billed),
+      received: round2(a.received + r.received),
+      pending: round2(a.pending + r.pending),
+    }),
+    { opening_balance: 0, billed: 0, received: 0, pending: 0 }
+  );
+  return { rows, totals, settings: getSettings(), generated: new Date().toLocaleDateString("en-CA") };
+}
 function getClient(id) {
   ensureFresh();
   const c = get("SELECT * FROM clients WHERE id = ?", [id]);
@@ -1015,7 +1052,7 @@ module.exports = {
   getSettings, saveSettings,
   listClients, getClient, saveClient, deleteClient,
   listEntries, saveEntry, deleteEntry, saveDailyRound, dailyRound,
-  listPayments, savePayment, deletePayment,
+  listPayments, savePayment, deletePayment, settlements,
   listPurchases, savePurchase, deletePurchase, listSuppliers,
   listExpenses, saveExpense, deleteExpense,
   profitLoss, dashboard, clientStatement, dailyMilkSheet,

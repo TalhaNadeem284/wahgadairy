@@ -169,6 +169,7 @@ handle("entries:dailyRoundSave", (date, rows) => { requireDb(); return db.saveDa
 handle("payments:list", (filter) => { requireDb(); return db.listPayments(filter || {}); });
 handle("payments:save", (p) => { requireDb(); return db.savePayment(p); });
 handle("payments:delete", (id) => { requireDb(); return db.deletePayment(id); });
+handle("settlements:get", (opts) => { requireDb(); return db.settlements(opts || {}); });
 
 /* ---------- purchases ---------- */
 handle("purchases:list", (filter) => { requireDb(); return db.listPurchases(filter || {}); });
