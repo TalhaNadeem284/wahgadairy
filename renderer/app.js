@@ -1117,7 +1117,11 @@ VIEWS.expenses = async (main) => {
   } }, "Add expense"));
   main.append(formCard);
 
-  const filterSel = selectBox([{ value: "all", label: "All categories" }, ...META.expenseCategories.map((c) => ({ value: c, label: titleCase(c) }))], "all");
+  const filterSel = selectBox([
+    { value: "all", label: "All categories" },
+    ...META.expenseCategories.map((c) => ({ value: c, label: titleCase(c) })),
+    { value: "sample milk", label: "Sample milk" },
+  ], "all");
   filterSel.addEventListener("change", () => { state.category = filterSel.value; load(); });
   const filterRow = el("div", { class: "row", style: "margin-top:18px" }, [
     dateRangeControls(state.from, state.to, (f, t) => { state.from = f; state.to = t; load(); }),
@@ -1129,33 +1133,62 @@ VIEWS.expenses = async (main) => {
 
   async function load() {
     container.innerHTML = "<div class='spin'>Loading…</div>";
-    const [rows, samples] = await Promise.all([
+    const [real, samples] = await Promise.all([
       rpc(A.expensesList({ from: state.from, to: state.to, category: state.category })),
       rpc(A.homeMilkList({ from: state.from, to: state.to, kind: "sample" })),
     ]);
-    const tot = rows.reduce((a, r) => a + r.amount, 0);
-    const sampleL = samples.reduce((a, r) => a + r.litres, 0);
     const sampleRate = parseFloat(SETTINGS.sample_rate) || 205;
+    // synthetic sample-milk rows so they're visible right here in the list
+    const showSamples = state.category === "all" || state.category === "sample milk";
+    const sampleRows = showSamples
+      ? samples.filter((s) => s.litres > 0).map((s) => ({
+          _sample: true, _id: s.id, date: s.date, category: "sample milk",
+          amount: round2(s.litres * sampleRate), litres: s.litres,
+          notes: `${litres(s.litres)} given free @ ${money(sampleRate)}/L`,
+        }))
+      : [];
+    const rows = [...real, ...sampleRows].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const tot = rows.reduce((a, r) => a + r.amount, 0);
     container.innerHTML = "";
-    if (sampleL > 0 && (state.category === "all" || state.category === "sample milk")) {
-      container.append(el("div", { class: "inline-note", style: "margin-bottom:12px" },
-        `🧪 Sample milk (auto): ${litres(sampleL)} × ${money(sampleRate)} = ${money(sampleL * sampleRate)} — counted as an expense in Profit & Loss. Set the daily litres on Daily Entry, the rate in Settings.`
-      ));
-    }
     container.append(dataTable([
       { header: "Date", key: "date" },
-      { header: "Category", render: (r) => el("span", { class: "badge gray", text: titleCase(r.category) }) },
+      { header: "Category", render: (r) => el("span", { class: r._sample ? "badge blue" : "badge gray", text: titleCase(r.category) }) },
       { header: "Amount", num: true, render: (r) => el("strong", { text: money(r.amount) }) },
       { header: "Notes", key: "notes" },
-      { header: "", render: (r) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this expense?")) { await rpc(A.expenseDelete(r.id)); toast("Deleted", "ok"); load(); } } }, "✕") },
+      { header: "", render: (r) => r._sample
+          ? el("span", { class: "mini", text: "auto" })
+          : el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this expense?")) { await rpc(A.expenseDelete(r.id)); toast("Deleted", "ok"); load(); } } }, "✕") },
     ], rows, {
-      onRowClick: (r) => expenseModal(r, load),
+      onRowClick: (r) => r._sample ? sampleMilkModal(r.date, r.litres, load) : expenseModal(r, load),
       footer: [{ text: "Total" }, { text: "" }, { text: money(tot), num: true }, { text: "" }, { text: "" }],
       empty: "No expenses for this period.",
     }));
+    if (showSamples && sampleRows.length) {
+      container.append(el("div", { class: "mini", style: "margin-top:8px", text: "“sample milk” rows are calculated from the litres you enter on Daily Entry × the sample rate in Settings — click one to change the litres for that day." }));
+    }
   }
   await load();
 };
+
+function sampleMilkModal(date, litresVal, onDone) {
+  const box = el("div", { class: "modal", style: "width:380px" });
+  const dateI = input({ type: "date", value: date || todayStr() });
+  const litI = input({ type: "number", min: "0", step: "0.25", value: litresVal ?? "", placeholder: "litres given free" });
+  box.append(el("h2", { text: "Sample milk given" }));
+  box.append(field("Date", dateI));
+  box.append(field("Litres given free", litI));
+  box.append(el("div", { class: "mini", text: "Valued at the sample rate in Settings (" + money(parseFloat(SETTINGS.sample_rate) || 205) + "/L) and counted as an expense." }));
+  const close = openOverlay(box, { center: true });
+  box.append(el("div", { class: "drawer-actions" }, [
+    el("button", { class: "btn", onclick: async () => {
+      try {
+        await rpc(A.homeMilkSave({ date: dateI.value, kind: "sample", litres: litI.value }));
+        toast("Saved", "ok"); close(); onDone && onDone();
+      } catch (e) { toast(e.message, "err"); }
+    } }, "Save"),
+    el("button", { class: "btn ghost", onclick: close }, "Cancel"),
+  ]));
+}
 
 function expenseModal(expense, onDone) {
   const box = el("div", { class: "modal", style: "width:420px" });
