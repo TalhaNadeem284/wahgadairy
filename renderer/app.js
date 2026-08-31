@@ -862,18 +862,18 @@ VIEWS.purchases = async (main) => {
     ]));
     const diff = s.totals.difference_litres;
     container.append(el("div", { class: "kpis", style: "margin-bottom:14px" }, [
-      kpi("Milk bought from suppliers", litres(s.totals.purchased_litres)),
+      kpi("Milk purchased", litres(s.totals.purchased_litres)),
       kpi("Purchase cost", money(s.totals.purchased_cost), "bad"),
-      kpi("Avg buy rate / litre", money2(s.totals.avg_rate)),
+      kpi("Avg rate / litre", money2(s.totals.avg_rate)),
       kpi("Milk delivered to clients", litres(s.totals.delivered_litres)),
       diff < 0
-        ? kpi("From own farm / stock", litres(-diff), "good")
-        : kpi("Bought, not yet delivered", litres(diff)),
+        ? kpi("Short (unrecorded purchase)", litres(-diff), "bad")
+        : kpi("Purchased, not delivered", litres(diff)),
     ]));
     container.append(el("div", { class: "mini", style: "margin-bottom:12px" },
       diff < 0
-        ? `You delivered ${litres(-diff)} more than you bought — that milk came from your own animals (or earlier stock).`
-        : "“Delivered” counts every client including wholesale buyers like Doodhi and Wahga Dairy."
+        ? `Delivered ${litres(-diff)} more than purchased — a purchase entry is probably missing.`
+        : "“Delivered” counts every client including wholesale buyers like Doodhi."
     ));
     if (s.by_supplier && s.by_supplier.length > 1) {
       container.append(el("div", { class: "card", style: "margin-bottom:14px" }, [
@@ -1087,16 +1087,16 @@ VIEWS.pl = async (main) => {
       kpi("Litres sold / bought", litres(d.litresSold) + " / " + litres(d.litresBought)),
     ]));
     container.append(el("div", { class: "card", style: "margin-top:14px" }, [
-      el("h2", { text: "Milk purchases (all suppliers)" }),
+      el("h2", { text: "Milk purchased (all suppliers)" }),
       el("div", { class: "row", style: "gap:24px;margin-top:8px;flex-wrap:wrap" }, [
-        el("div", {}, [el("div", { class: "mini", text: "Total milk bought" }), el("strong", { text: litres(d.litresBought) })]),
+        el("div", {}, [el("div", { class: "mini", text: "Total milk purchased" }), el("strong", { text: litres(d.litresBought) })]),
         el("div", {}, [el("div", { class: "mini", text: "Total spent on milk" }), el("strong", { text: money(d.cogs) })]),
         el("div", {}, [el("div", { class: "mini", text: "Average rate" }), el("strong", { text: money2(d.avgPurchaseRate) + " / L" })]),
       ]),
       el("div", { class: "mini", style: "margin-top:10px" },
         d.litresSold >= d.litresBought
-          ? `Delivered ${litres(d.litresSold)} vs bought ${litres(d.litresBought)} — the extra ${litres(round2(d.litresSold - d.litresBought))} came from your own animals (free), so "Cost of milk sold" = everything you actually spent on milk (${money(d.cogs)}).`
-          : `Bought ${litres(d.litresBought)}, delivered ${litres(d.litresSold)} — the rest is home use, samples, wastage or stock. "Cost of milk sold" values only the delivered litres at ${money2(d.avgPurchaseRate)}/L.`
+          ? `Delivered ${litres(d.litresSold)} vs purchased ${litres(d.litresBought)} — a small gap usually means a purchase entry is missing. Cost of milk sold = total spent on milk (${money(d.cogs)}).`
+          : `Purchased ${litres(d.litresBought)}, delivered ${litres(d.litresSold)} — the rest is home use, samples, wastage or stock. Cost of milk sold values the delivered litres at ${money2(d.avgPurchaseRate)}/L.`
       ),
     ]));
 
