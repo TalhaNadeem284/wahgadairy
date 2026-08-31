@@ -706,6 +706,14 @@ function profitLoss(from, to) {
     "SELECT COALESCE(SUM(quantity_litres),0) t FROM purchases WHERE date BETWEEN ? AND ?", [from, to]
   ).t);
 
+  // "Sold basis": value only the milk that was actually delivered to clients,
+  // at the period's average purchase rate. Avoids a period looking like a huge
+  // loss just because stock / home-use milk was bought in it.
+  const avgPurchaseRate = litresBought ? round2(cogs / litresBought) : 0;
+  const costMilkSold = round2(litresSold * avgPurchaseRate);
+  const marginOnSales = round2(revenue - costMilkSold);
+  const operatingProfit = round2(marginOnSales - totalExpenses);
+
   const byCategory = all(
     "SELECT category, COALESCE(SUM(amount),0) amount, COUNT(*) n FROM expenses WHERE date BETWEEN ? AND ? GROUP BY category ORDER BY amount DESC",
     [from, to]
@@ -731,7 +739,8 @@ function profitLoss(from, to) {
 
   return {
     from, to, revenue, cogs, grossProfit, totalExpenses, netProfit,
-    litresSold, litresBought, byCategory, days,
+    litresSold, litresBought, avgPurchaseRate, costMilkSold, marginOnSales, operatingProfit,
+    byCategory, days,
   };
 }
 
@@ -746,6 +755,9 @@ function dashboard() {
     "SELECT COALESCE(SUM(total_amount),0) t FROM milk_entries WHERE date = ?", [today]
   ).t);
   const pl = profitLoss(monthStart, today);
+  const monthCollected = round2(get(
+    "SELECT COALESCE(SUM(amount),0) t FROM payments WHERE date BETWEEN ? AND ?", [monthStart, today]
+  ).t);
   const receivable = round2(
     listClients(true).reduce((a, c) => a + Math.max(0, c.balance), 0)
   );
@@ -756,8 +768,10 @@ function dashboard() {
     today_litres: todayLitres,
     today_revenue: todayRevenue,
     month_revenue: pl.revenue,
+    month_collected: monthCollected,
     month_expenses: pl.totalExpenses,
-    month_net_profit: pl.netProfit,
+    month_net_profit: pl.operatingProfit,
+    month_litres_sold: pl.litresSold,
     receivable,
     active_clients: activeClients,
   };

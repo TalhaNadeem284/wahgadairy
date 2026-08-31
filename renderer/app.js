@@ -41,6 +41,7 @@ function toast(msg, kind = "") {
 let SETTINGS = {};
 let META = {};
 
+function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 function currency() { return SETTINGS.currency || "Rs"; }
 function money(n) {
   const v = Math.round(Number(n) || 0);
@@ -287,16 +288,21 @@ async function pickExisting() {
 VIEWS.dashboard = async (main) => {
   const d = await rpc(A.dashboard());
   main.innerHTML = "";
-  main.append(pageHead("Dashboard", "Today at a glance, and this month so far."));
+  const monthName = new Date(d.today + "T00:00:00").toLocaleDateString("en-PK", { month: "long" });
+  main.append(pageHead("Dashboard", `Today at a glance, and ${monthName} so far (1–${d.today.slice(8)}).`));
   main.append(el("div", { class: "kpis" }, [
     kpi("Litres delivered today", litres(d.today_litres)),
-    kpi("Revenue today", money(d.today_revenue), "accent"),
-    kpi("Revenue this month", money(d.month_revenue)),
-    kpi("Expenses this month", money(d.month_expenses), "bad"),
-    kpi("Net profit this month", money(d.month_net_profit), d.month_net_profit >= 0 ? "good" : "bad"),
+    kpi("Revenue today (billed)", money(d.today_revenue), "accent"),
+    kpi(`${monthName} revenue (billed)`, money(d.month_revenue)),
+    kpi(`${monthName} cash collected`, money(d.month_collected), "good"),
+    kpi(`${monthName} expenses`, money(d.month_expenses), "bad"),
+    kpi(`${monthName} operating profit`, money(d.month_net_profit), d.month_net_profit >= 0 ? "good" : "bad"),
     kpi("Outstanding (to receive)", money(d.receivable), d.receivable > 0 ? "bad" : "good"),
     kpi("Active clients", String(d.active_clients)),
   ]));
+  main.append(el("div", { class: "mini", style: "margin-top:8px" },
+    "“Revenue (billed)” is the value of milk delivered — it includes today. “Cash collected” is payments actually received. “Operating profit” values milk at cost of what was sold, not everything bought."
+  ));
   main.append(el("div", { class: "card", style: "margin-top:18px" }, [
     el("h2", { text: "Quick actions" }),
     el("div", { class: "row", style: "margin-top:12px" }, [
@@ -483,6 +489,12 @@ VIEWS.clients = async (main) => {
       { header: currency() + " / litre", num: true, render: (c) => money(c.price_per_litre) },
       { header: "Balance", num: true, render: (c) => el("span", { class: c.balance > 0 ? "badge red" : "badge green", text: money(c.balance) }) },
       { header: "Status", render: (c) => el("span", { class: c.active ? "badge green" : "badge gray", text: c.active ? "Active" : "Inactive" }) },
+      {
+        header: "", render: (c) => el("button", {
+          class: "btn sm secondary",
+          onclick: (e) => { e.stopPropagation(); paymentModal(c.id, null, () => load()); },
+        }, "💵 Receive"),
+      },
     ], clients, { onRowClick: (c) => clientDrawer(c.id), empty: "No clients yet." }));
   }
   VIEWS.clients._reload = load;
@@ -514,6 +526,26 @@ async function clientDrawer(id) {
   const noteI = el("textarea", { placeholder: "Optional" }, f.note);
 
   drawer.append(el("h2", { text: client ? "Edit client" : "Add client" }));
+  const balCell = client ? el("strong", { class: client.balance > 0 ? "badge red" : "badge green", text: money(client.balance) }) : null;
+  if (client) {
+    drawer.append(el("div", { class: "row between", style: "background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:14px" }, [
+      el("span", { class: "mini", text: "Current balance owed" }),
+      el("div", { class: "row", style: "gap:8px;align-items:center" }, [
+        balCell,
+        el("button", { class: "btn sm", onclick: () => paymentModal(client.id, null, reloadBalance) }, "💵 Receive payment"),
+      ]),
+    ]));
+  }
+  let refreshPaymentsList = () => {};
+  async function reloadBalance() {
+    if (!client) return;
+    const fresh = await rpc(A.clientGet(client.id));
+    client.balance = fresh.balance;
+    balCell.textContent = money(fresh.balance);
+    balCell.className = fresh.balance > 0 ? "badge red" : "badge green";
+    refreshPaymentsList();
+    VIEWS.clients._reload && VIEWS.clients._reload();
+  }
   drawer.append(field("Name", nameI));
   drawer.append(field("Phone", phoneI));
   drawer.append(field("Address", addrI));
@@ -535,7 +567,7 @@ async function clientDrawer(id) {
     drawer.append(el("hr", { style: "margin:20px 0;border:0;border-top:1px solid var(--border)" }));
     drawer.append(el("div", { class: "row between" }, [
       el("h2", { text: "Payments", style: "margin:0" }),
-      el("button", { class: "btn sm secondary", onclick: () => paymentModal(client.id, null, refreshPayments) }, "＋ Record payment"),
+      el("button", { class: "btn sm secondary", onclick: () => paymentModal(client.id, null, reloadBalance) }, "＋ Record payment"),
     ]));
     const payBox = el("div", { style: "margin-top:10px" });
     drawer.append(payBox);
@@ -551,9 +583,10 @@ async function clientDrawer(id) {
         { header: "Date", key: "date" },
         { header: "Amount", num: true, render: (p) => money(p.amount) },
         { header: "Method", render: (p) => titleCase(p.method || "—") },
-        { header: "", render: (p) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this payment?")) { await rpc(A.paymentDelete(p.id)); refreshPayments(); toast("Deleted", "ok"); } } }, "✕") },
-      ], pays));
+        { header: "", render: (p) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this payment?")) { await rpc(A.paymentDelete(p.id)); reloadBalance(); toast("Deleted", "ok"); } } }, "✕") },
+      ], pays, { onRowClick: (p) => paymentModal(client.id, p, reloadBalance) }));
     }
+    refreshPaymentsList = refreshPayments;
     refreshPayments();
   }
 
@@ -582,26 +615,57 @@ async function clientDrawer(id) {
   }
 }
 
-function paymentModal(clientId, payment, onDone) {
-  const box = el("div", { class: "modal", style: "width:420px" });
+async function paymentModal(clientId, payment, onDone) {
+  const client = await rpc(A.clientGet(clientId));
+  // Balance excluding the payment being edited, so "remaining" math is right.
+  const baseBalance = payment?.id ? round2(client.balance + Number(payment.amount || 0)) : client.balance;
+
+  const box = el("div", { class: "modal", style: "width:440px" });
   const dateI = input({ type: "date", value: payment?.date || todayStr() });
-  const amtI = input({ type: "number", min: "0", step: "1", value: payment?.amount || "", placeholder: "e.g. 5000" });
+  const amtI = input({ type: "number", min: "0", step: "1", value: payment?.amount || "", placeholder: "amount received" });
   const methodI = selectBox(META.paymentMethods, payment?.method || "cash");
   const noteI = input({ value: payment?.note || "", placeholder: "Optional" });
-  box.append(el("h2", { text: payment?.id ? "Edit payment" : "Record payment" }));
-  box.append(field("Date", dateI));
-  box.append(field("Amount (" + currency() + ")", amtI));
+
+  box.append(el("h2", { text: (payment?.id ? "Edit payment — " : "Receive payment — ") + client.name }));
+
+  const owedRow = el("div", { class: "row between", style: "background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:14px" }, [
+    el("span", { class: "mini", text: "Currently owes" }),
+    el("strong", { class: baseBalance > 0 ? "" : "", text: money(baseBalance) }),
+  ]);
+  box.append(owedRow);
+
+  box.append(field("Date received", dateI));
+  box.append(field("Amount received (" + currency() + ")", amtI));
   box.append(field("Method", methodI));
   box.append(field("Note", noteI));
+
+  const remainCell = el("strong");
+  const remainRow = el("div", { class: "row between", style: "border-top:2px solid var(--border);padding-top:10px;margin-top:6px" }, [
+    el("span", { class: "mini", text: "Remaining after this payment" }),
+    remainCell,
+  ]);
+  box.append(remainRow);
+
+  function recalc() {
+    const amt = parseFloat(amtI.value) || 0;
+    const remain = round2(baseBalance - amt);
+    remainCell.textContent = money(remain);
+    remainCell.className = remain > 0 ? "badge red" : "badge green";
+  }
+  amtI.addEventListener("input", recalc);
+  recalc();
+
   const close = openOverlay(box, { center: true });
   box.append(el("div", { class: "drawer-actions" }, [
     el("button", { class: "btn", onclick: async () => {
       try {
         if (!(parseFloat(amtI.value) > 0)) throw new Error("Enter a valid amount.");
         await rpc(A.paymentSave({ id: payment?.id, client_id: clientId, date: dateI.value, amount: amtI.value, method: methodI.value, note: noteI.value }));
-        toast("Payment saved", "ok"); close(); onDone && onDone();
+        toast("Payment saved — remaining " + money(round2(baseBalance - (parseFloat(amtI.value) || 0))), "ok");
+        close(); onDone && onDone();
       } catch (e) { toast(e.message, "err"); }
-    } }, "Save"),
+    } }, "Save payment"),
+    baseBalance > 0 ? el("button", { class: "btn secondary", onclick: () => { amtI.value = String(Math.round(baseBalance)); recalc(); } }, "Pay full " + money(baseBalance)) : null,
     el("button", { class: "btn ghost", onclick: close }, "Cancel"),
   ]));
 }
@@ -902,12 +966,23 @@ VIEWS.pl = async (main) => {
     const d = await rpc(A.profitLoss(state.from, state.to));
     container.innerHTML = "";
     container.append(el("div", { class: "kpis" }, [
-      kpi("Revenue (milk sold)", money(d.revenue)),
-      kpi("Cost of milk bought", money(d.cogs)),
-      kpi("Gross profit", money(d.grossProfit), d.grossProfit >= 0 ? "good" : "bad"),
-      kpi("Total expenses", money(d.totalExpenses), "bad"),
-      kpi("Net profit", money(d.netProfit), d.netProfit >= 0 ? "good" : "bad"),
-      kpi("Litres sold / bought", litres(d.litresSold) + "  /  " + litres(d.litresBought)),
+      kpi("Revenue (milk billed)", money(d.revenue)),
+      kpi("Cost of milk sold (est.)", money(d.costMilkSold)),
+      kpi("Margin on sales", money(d.marginOnSales), d.marginOnSales >= 0 ? "good" : "bad"),
+      kpi("Expenses", money(d.totalExpenses), "bad"),
+      kpi("Operating profit", money(d.operatingProfit), d.operatingProfit >= 0 ? "good" : "bad"),
+      kpi("Litres sold / bought", litres(d.litresSold) + " / " + litres(d.litresBought)),
+    ]));
+    container.append(el("div", { class: "card", style: "margin-top:14px" }, [
+      el("h2", { text: "Milk purchases (all suppliers)" }),
+      el("div", { class: "row", style: "gap:24px;margin-top:8px;flex-wrap:wrap" }, [
+        el("div", {}, [el("div", { class: "mini", text: "Total milk bought" }), el("strong", { text: litres(d.litresBought) })]),
+        el("div", {}, [el("div", { class: "mini", text: "Total spent on milk" }), el("strong", { text: money(d.cogs) })]),
+        el("div", {}, [el("div", { class: "mini", text: "Average rate" }), el("strong", { text: money2(d.avgPurchaseRate) + " / L" })]),
+      ]),
+      el("div", { class: "mini", style: "margin-top:10px" },
+        `You bought ${litres(d.litresBought)} but delivered ${litres(d.litresSold)} to clients — the rest is home use, samples, wastage or stock. "Cost of milk sold" above values only the delivered ${litres(d.litresSold)} at ${money2(d.avgPurchaseRate)}/L so the profit isn't dragged down by milk you didn't sell.`
+      ),
     ]));
 
     if (d.byCategory.length) {
@@ -925,11 +1000,12 @@ VIEWS.pl = async (main) => {
     }
 
     container.append(el("div", { class: "card", style: "margin-top:18px" }, [
-      el("h2", { text: "Day by day" }),
+      el("h2", { text: "Day by day (actual cash view)" }),
+      el("div", { class: "sub", text: "Milk delivered vs actual milk purchased and expenses on each date." }),
       dataTable([
         { header: "Date", key: "date" },
-        { header: "Revenue", num: true, render: (r) => money(r.revenue) },
-        { header: "Milk cost", num: true, render: (r) => money(r.cogs) },
+        { header: "Billed", num: true, render: (r) => money(r.revenue) },
+        { header: "Milk bought", num: true, render: (r) => money(r.cogs) },
         { header: "Expenses", num: true, render: (r) => money(r.expenses) },
         { header: "Net", num: true, render: (r) => el("strong", { class: r.net >= 0 ? "" : "", text: money(r.net) }) },
       ], d.days, {
