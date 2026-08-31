@@ -935,11 +935,20 @@ function getInvoice(id) {
     [id]
   );
   if (!inv) return null;
-  // Re-pull the live line items for the period so the printed invoice shows detail.
+  // Recompute everything live for the invoice's period so the line items and
+  // the totals can never disagree (e.g. after a delivery was fixed later).
+  // Only invoice_no / issued_date / note are kept from the stored row; the
+  // period_* columns on the row remain a snapshot of what was billed at issue.
   const core = statementCore(inv.client_id, inv.period_from, inv.period_to);
   inv.entries = core.entries;
   inv.payments = core.payments;
   inv.by_day = core.by_day;
+  inv.snapshot_total_due = inv.total_due;
+  inv.previous_balance = core.opening_balance;
+  inv.period_litres = core.period_litres;
+  inv.period_billed = core.period_billed;
+  inv.period_paid = core.period_paid;
+  inv.total_due = core.closing_balance;
   inv.settings = getSettings();
   inv.client = get("SELECT * FROM clients WHERE id = ?", [inv.client_id]);
   return inv;
