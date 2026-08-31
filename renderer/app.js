@@ -751,82 +751,110 @@ async function entryModal(entry, onDone) {
 
 /* ---- purchases ---- */
 VIEWS.purchases = async (main) => {
-  const state = { from: "", to: "" };
+  const p0 = period("thismonth");
+  const state = { from: "", to: "", sfrom: p0.from, sto: p0.to, supplier: "all", ssupplier: "all" };
+  let suppliers = await rpc(A.purchaseSuppliers()); // [{supplier, n, litres, cost}]
+
   main.innerHTML = "";
-  main.append(pageHead("Purchases", "Bulk milk bought from suppliers — your cost of goods."));
+  main.append(pageHead("Purchases", "Milk bought from suppliers — Chacha Dairy, Wahga Dairy, Doodhi, etc."));
+
+  // ---- record form ----
   const formCard = el("div", { class: "card" });
   const dateI = input({ type: "date", value: todayStr() });
+  const supplierI = input({ placeholder: "e.g. Chacha Dairy", list: "supplier-list" });
+  const supplierList = el("datalist", { id: "supplier-list" });
   const qtyI = input({ type: "number", min: "0", step: "1", placeholder: "e.g. 100" });
   const priceI = input({ type: "number", min: "0", step: "0.5", placeholder: "e.g. 180" });
   const notesI = input({ placeholder: "Optional" });
   const preview = el("strong", { text: money(0) });
   const recalc = () => { const q = parseFloat(qtyI.value), p = parseFloat(priceI.value); preview.textContent = money(q > 0 && p > 0 ? q * p : 0); };
   qtyI.addEventListener("input", recalc); priceI.addEventListener("input", recalc);
+  function refreshSupplierOptions() {
+    supplierList.innerHTML = "";
+    for (const s of suppliers) supplierList.append(el("option", { value: s.supplier }));
+  }
+  refreshSupplierOptions();
   formCard.append(el("h2", { text: "Record a purchase" }));
+  formCard.append(supplierList);
   formCard.append(el("div", { class: "form-grid", style: "margin-top:12px" }, [
-    field("Date", dateI), field("Quantity (litres)", qtyI), field("Price / litre", priceI), field("Supplier notes", notesI),
+    field("Date", dateI), field("Supplier", supplierI), field("Quantity (litres)", qtyI),
+    field("Price / litre", priceI), field("Notes", notesI),
     el("div", {}, [el("div", { class: "mini", text: "Total cost" }), el("div", { style: "font-size:18px" }, [preview])]),
   ]));
   formCard.append(el("button", { class: "btn", style: "margin-top:14px", onclick: async () => {
     try {
-      await rpc(A.purchaseSave({ date: dateI.value, quantity_litres: qtyI.value, price_per_litre: priceI.value, supplier_notes: notesI.value }));
-      toast("Purchase recorded", "ok"); qtyI.value = ""; priceI.value = ""; notesI.value = ""; recalc(); load();
+      await rpc(A.purchaseSave({
+        date: dateI.value, supplier: supplierI.value, quantity_litres: qtyI.value,
+        price_per_litre: priceI.value, supplier_notes: notesI.value,
+      }));
+      toast("Purchase recorded", "ok");
+      qtyI.value = ""; priceI.value = ""; notesI.value = ""; recalc();
+      suppliers = await rpc(A.purchaseSuppliers()); refreshSupplierOptions();
+      render();
     } catch (e) { toast(e.message, "err"); }
   } }, "Add purchase"));
   main.append(formCard);
 
-  // ---- section switch: individual purchases  |  daily sheet ----
-  const sec = { v: "sheet" };
-  const seg = segmented([["sheet", "Daily purchase sheet"], ["list", "All purchases"]], sec.v, (v) => { sec.v = v; render(); });
+  // ---- section switch ----
+  const sec = { v: "list" };
+  const seg = segmented([["list", "All purchases"], ["sheet", "Daily purchase sheet"]], sec.v, (v) => { sec.v = v; render(); });
   seg.style.margin = "20px 0 12px";
   main.append(seg);
-
   const filterWrap = el("div");
   main.append(filterWrap);
   const container = el("div", { style: "margin-top:12px" });
   main.append(container);
 
+  function supplierFilter(current, onChange) {
+    const opts = [{ value: "all", label: "All suppliers" }, ...suppliers.map((s) => ({ value: s.supplier, label: `${s.supplier} (${litres(s.litres)})` }))];
+    const sel = selectBox(opts, current);
+    sel.addEventListener("change", () => onChange(sel.value));
+    return field("Supplier", sel);
+  }
+
   function render() {
     filterWrap.innerHTML = "";
     if (sec.v === "list") {
-      state.from = state.from || ""; state.to = state.to || "";
-      const fr = dateRangeControls(state.from, state.to, (f, t) => { state.from = f; state.to = t; loadList(); });
-      filterWrap.append(fr);
+      filterWrap.append(el("div", { class: "row" }, [
+        dateRangeControls(state.from, state.to, (f, t) => { state.from = f; state.to = t; loadList(); }),
+        supplierFilter(state.supplier, (v) => { state.supplier = v; loadList(); }),
+      ]));
       loadList();
     } else {
-      if (!state.sfrom) { const p = period("thismonth"); state.sfrom = p.from; state.sto = p.to; }
-      const fr = el("div", { class: "row" }, [
+      filterWrap.append(el("div", { class: "row" }, [
         dateRangeControls(state.sfrom, state.sto, (f, t) => { state.sfrom = f; state.sto = t; loadSheet(); }),
+        supplierFilter(state.ssupplier, (v) => { state.ssupplier = v; loadSheet(); }),
         el("button", { class: "btn secondary sm", onclick: () => { const p = period("thismonth"); state.sfrom = p.from; state.sto = p.to; render(); } }, "This month"),
         el("button", { class: "btn secondary sm", onclick: () => { const p = period("lastmonth"); state.sfrom = p.from; state.sto = p.to; render(); } }, "Last month"),
-      ]);
-      filterWrap.append(fr);
+      ]));
       loadSheet();
     }
   }
 
   async function loadList() {
     container.innerHTML = "<div class='spin'>Loading…</div>";
-    const rows = await rpc(A.purchasesList({ from: state.from || undefined, to: state.to || undefined }));
+    const rows = await rpc(A.purchasesList({ from: state.from || undefined, to: state.to || undefined, supplier: state.supplier }));
     const totC = rows.reduce((a, r) => a + r.total_cost, 0);
     const totL = rows.reduce((a, r) => a + r.quantity_litres, 0);
     container.innerHTML = "";
     container.append(dataTable([
       { header: "Date", key: "date" },
+      { header: "Supplier", render: (r) => el("strong", { text: r.supplier || "—" }) },
       { header: "Litres", num: true, render: (r) => litres(r.quantity_litres) },
       { header: currency() + "/L", num: true, render: (r) => money(r.price_per_litre) },
       { header: "Total cost", num: true, render: (r) => el("strong", { text: money(r.total_cost) }) },
       { header: "Notes", key: "supplier_notes" },
       { header: "", render: (r) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this purchase?")) { await rpc(A.purchaseDelete(r.id)); toast("Deleted", "ok"); loadList(); } } }, "✕") },
     ], rows, {
-      footer: [{ text: "Total" }, { text: litres(totL), num: true }, { text: "" }, { text: money(totC), num: true }, { text: "" }, { text: "" }],
-      empty: "No purchases recorded.",
+      onRowClick: (r) => purchaseModal(r, suppliers, async () => { suppliers = await rpc(A.purchaseSuppliers()); loadList(); }),
+      footer: [{ text: "Total" }, { text: "" }, { text: litres(totL), num: true }, { text: "" }, { text: money(totC), num: true }, { text: "" }, { text: "" }],
+      empty: "No purchases for this filter.",
     }));
   }
 
   async function loadSheet() {
     container.innerHTML = "<div class='spin'>Building sheet…</div>";
-    const s = await rpc(A.dailyMilkSheet(state.sfrom, state.sto));
+    const s = await rpc(A.dailyMilkSheet(state.sfrom, state.sto, state.ssupplier));
     container.innerHTML = "";
     container.append(el("div", { class: "row", style: "margin-bottom:12px" }, [
       el("button", { class: "btn secondary", onclick: () => rpc(A.printHtml(purchaseSheetHtml(s))).catch((e) => toast(e.message, "err")) }, "🖨  Print sheet"),
@@ -839,6 +867,18 @@ VIEWS.purchases = async (main) => {
       kpi("Milk delivered", litres(s.totals.delivered_litres)),
       kpi("Purchased − delivered", litres(s.totals.difference_litres), s.totals.difference_litres < 0 ? "bad" : ""),
     ]));
+    if (s.by_supplier && s.by_supplier.length > 1) {
+      container.append(el("div", { class: "card", style: "margin-bottom:14px" }, [
+        el("h2", { text: "By supplier" }),
+        dataTable([
+          { header: "Supplier", render: (r) => el("strong", { text: r.supplier }) },
+          { header: "Purchases", num: true, key: "n" },
+          { header: "Litres", num: true, render: (r) => litres(r.litres) },
+          { header: "Avg rate", num: true, render: (r) => money2(r.avg_rate) },
+          { header: "Cost", num: true, render: (r) => money(r.cost) },
+        ], s.by_supplier, { empty: "—" }),
+      ]));
+    }
     container.append(dataTable([
       { header: "Date", key: "date" },
       { header: "Purchased", num: true, render: (r) => litres(r.purchased_litres) },
@@ -861,6 +901,40 @@ VIEWS.purchases = async (main) => {
 
   render();
 };
+
+function purchaseModal(purchase, suppliers, onDone) {
+  const box = el("div", { class: "modal", style: "width:460px" });
+  const dateI = input({ type: "date", value: purchase?.date || todayStr() });
+  const supplierI = input({ value: purchase?.supplier || "", list: "supplier-list-modal", placeholder: "e.g. Chacha Dairy" });
+  const dl = el("datalist", { id: "supplier-list-modal" });
+  for (const s of suppliers || []) dl.append(el("option", { value: s.supplier }));
+  const qtyI = input({ type: "number", min: "0", step: "0.5", value: purchase?.quantity_litres ?? "" });
+  const priceI = input({ type: "number", min: "0", step: "0.5", value: purchase?.price_per_litre ?? "" });
+  const notesI = input({ value: purchase?.supplier_notes || "", placeholder: "Optional" });
+  box.append(el("h2", { text: purchase ? "Edit purchase" : "Add purchase" }));
+  box.append(dl);
+  box.append(field("Date", dateI));
+  box.append(field("Supplier", supplierI));
+  box.append(field("Quantity (litres)", qtyI));
+  box.append(field("Price per litre (" + currency() + ")", priceI));
+  box.append(field("Notes", notesI));
+  const close = openOverlay(box, { center: true });
+  box.append(el("div", { class: "drawer-actions" }, [
+    el("button", { class: "btn", onclick: async () => {
+      try {
+        await rpc(A.purchaseSave({
+          id: purchase?.id, date: dateI.value, supplier: supplierI.value,
+          quantity_litres: qtyI.value, price_per_litre: priceI.value, supplier_notes: notesI.value,
+        }));
+        toast("Saved", "ok"); close(); onDone && onDone();
+      } catch (e) { toast(e.message, "err"); }
+    } }, "Save"),
+    purchase ? el("button", { class: "btn danger", onclick: async () => {
+      if (await confirmBox("Delete this purchase?")) { await rpc(A.purchaseDelete(purchase.id)); toast("Deleted", "ok"); close(); onDone && onDone(); }
+    } }, "Delete") : null,
+    el("button", { class: "btn ghost", onclick: close }, "Cancel"),
+  ]));
+}
 
 function segmented(options, value, onChange) {
   const wrap = el("div", { class: "row", style: "gap:6px" });
@@ -888,8 +962,10 @@ function purchaseSheetHtml(s) {
       <div><h1>${esc(s.settings.shop_name || "Wahga Dairy Farm")}</h1>
       <div class="muted">${esc(s.settings.shop_address || "")}</div></div>
       <div class="ttl"><div class="big">MILK PURCHASE SHEET</div>
-      <div class="muted">${esc(s.from)} &nbsp;to&nbsp; ${esc(s.to)}</div></div>
+      <div class="muted">${esc(s.from)} &nbsp;to&nbsp; ${esc(s.to)}</div>
+      <div class="muted">${s.supplier && s.supplier !== "all" ? "Supplier: " + esc(s.supplier) : "All suppliers"}</div></div>
     </div>
+    ${(s.by_supplier && s.by_supplier.length > 1) ? `<table style="margin-bottom:14px"><thead><tr><th>Supplier</th><th class="r">Litres</th><th class="r">Avg rate</th><th class="r">Cost</th></tr></thead><tbody>${s.by_supplier.map((r) => `<tr><td>${esc(r.supplier)}</td><td class="r">${L(r.litres)}</td><td class="r">${m(r.avg_rate)}</td><td class="r">${m(r.cost)}</td></tr>`).join("")}</tbody></table>` : ""}
     <table>
       <thead><tr><th>Date</th><th class="r">Purchased (L)</th><th class="r">Rate</th><th class="r">Cost</th><th class="r">Delivered (L)</th><th class="r">Diff (L)</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="6" class="muted c">Nothing recorded for this period</td></tr>`}</tbody>
@@ -945,12 +1021,41 @@ VIEWS.expenses = async (main) => {
       { header: "Notes", key: "notes" },
       { header: "", render: (r) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this expense?")) { await rpc(A.expenseDelete(r.id)); toast("Deleted", "ok"); load(); } } }, "✕") },
     ], rows, {
+      onRowClick: (r) => expenseModal(r, load),
       footer: [{ text: "Total" }, { text: "" }, { text: money(tot), num: true }, { text: "" }, { text: "" }],
       empty: "No expenses for this period.",
     }));
   }
   await load();
 };
+
+function expenseModal(expense, onDone) {
+  const box = el("div", { class: "modal", style: "width:420px" });
+  const dateI = input({ type: "date", value: expense?.date || todayStr() });
+  const cats = [...META.expenseCategories];
+  if (expense?.category && !cats.includes(expense.category)) cats.push(expense.category);
+  const catI = selectBox(cats, expense?.category || "petrol");
+  const amtI = input({ type: "number", min: "0", step: "1", value: expense?.amount ?? "", placeholder: "e.g. 1500" });
+  const notesI = input({ value: expense?.notes || "", placeholder: "Optional" });
+  box.append(el("h2", { text: expense ? "Edit expense" : "Add expense" }));
+  box.append(field("Date", dateI));
+  box.append(field("Category", catI));
+  box.append(field("Amount (" + currency() + ")", amtI));
+  box.append(field("Notes", notesI));
+  const close = openOverlay(box, { center: true });
+  box.append(el("div", { class: "drawer-actions" }, [
+    el("button", { class: "btn", onclick: async () => {
+      try {
+        await rpc(A.expenseSave({ id: expense?.id, date: dateI.value, category: catI.value, amount: amtI.value, notes: notesI.value }));
+        toast("Saved", "ok"); close(); onDone && onDone();
+      } catch (e) { toast(e.message, "err"); }
+    } }, "Save"),
+    expense ? el("button", { class: "btn danger", onclick: async () => {
+      if (await confirmBox("Delete this expense?")) { await rpc(A.expenseDelete(expense.id)); toast("Deleted", "ok"); close(); onDone && onDone(); }
+    } }, "Delete") : null,
+    el("button", { class: "btn ghost", onclick: close }, "Cancel"),
+  ]));
+}
 
 /* ---- profit & loss ---- */
 VIEWS.pl = async (main) => {

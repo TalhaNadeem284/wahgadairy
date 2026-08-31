@@ -174,6 +174,7 @@ handle("payments:delete", (id) => { requireDb(); return db.deletePayment(id); })
 handle("purchases:list", (filter) => { requireDb(); return db.listPurchases(filter || {}); });
 handle("purchases:save", (p) => { requireDb(); return db.savePurchase(p); });
 handle("purchases:delete", (id) => { requireDb(); return db.deletePurchase(id); });
+handle("purchases:suppliers", () => { requireDb(); return db.listSuppliers(); });
 
 /* ---------- expenses ---------- */
 handle("expenses:list", (filter) => { requireDb(); return db.listExpenses(filter || {}); });
@@ -186,7 +187,7 @@ handle("reports:dashboard", () => { requireDb(); return db.dashboard(); });
 
 /* ---------- statement / sheet / invoices ---------- */
 handle("statement:get", (clientId, from, to) => { requireDb(); return db.clientStatement(clientId, from, to); });
-handle("sheet:milk", (from, to) => { requireDb(); return db.dailyMilkSheet(from, to); });
+handle("sheet:milk", (from, to, supplier) => { requireDb(); return db.dailyMilkSheet(from, to, supplier); });
 handle("invoices:list", (filter) => { requireDb(); return db.listInvoices(filter || {}); });
 handle("invoices:preview", (clientId, from, to) => { requireDb(); return db.invoicePreview(clientId, from, to); });
 handle("invoices:create", (inv) => { requireDb(); return db.createInvoice(inv); });

@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld("api", {
   purchasesList: (filter) => invoke("purchases:list", filter),
   purchaseSave: (p) => invoke("purchases:save", p),
   purchaseDelete: (id) => invoke("purchases:delete", id),
+  purchaseSuppliers: () => invoke("purchases:suppliers"),
 
   expensesList: (filter) => invoke("expenses:list", filter),
   expenseSave: (x) => invoke("expenses:save", x),
@@ -53,7 +54,7 @@ contextBridge.exposeInMainWorld("api", {
   dashboard: () => invoke("reports:dashboard"),
 
   statement: (clientId, from, to) => invoke("statement:get", clientId, from, to),
-  dailyMilkSheet: (from, to) => invoke("sheet:milk", from, to),
+  dailyMilkSheet: (from, to, supplier) => invoke("sheet:milk", from, to, supplier),
 
   invoicesList: (filter) => invoke("invoices:list", filter),
   invoicePreview: (clientId, from, to) => invoke("invoices:preview", clientId, from, to),

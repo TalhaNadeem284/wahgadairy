@@ -333,13 +333,19 @@ function migrate() {
   `);
   // Columns added after the first release — safe on existing databases.
   ensureColumn("clients", "default_litres", "REAL NOT NULL DEFAULT 0");
+  if (ensureColumn("purchases", "supplier", "TEXT")) {
+    // Purchases used to keep the supplier name in supplier_notes — split it out.
+    db.run("UPDATE purchases SET supplier = supplier_notes, supplier_notes = NULL WHERE supplier IS NULL AND supplier_notes IS NOT NULL");
+  }
 }
 
 function ensureColumn(table, col, decl) {
   const cols = all(`PRAGMA table_info(${table})`);
   if (!cols.some((c) => c.name === col)) {
     db.run(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+    return true;
   }
+  return false;
 }
 
 function seedSettings() {
@@ -620,8 +626,17 @@ function listPurchases(filter = {}) {
   const params = [];
   if (filter.from) { where.push("date >= ?"); params.push(filter.from); }
   if (filter.to) { where.push("date <= ?"); params.push(filter.to); }
+  if (filter.supplier && filter.supplier !== "all") {
+    where.push("IFNULL(supplier,'') = ?"); params.push(filter.supplier);
+  }
   const clause = where.length ? "WHERE " + where.join(" AND ") : "";
   return all(`SELECT * FROM purchases ${clause} ORDER BY date DESC, id DESC LIMIT 500`, params);
+}
+function listSuppliers() {
+  ensureFresh();
+  return all(
+    "SELECT supplier, COUNT(*) n, COALESCE(SUM(quantity_litres),0) litres, COALESCE(SUM(total_cost),0) cost FROM purchases WHERE supplier IS NOT NULL AND supplier <> '' GROUP BY supplier ORDER BY cost DESC"
+  );
 }
 function savePurchase(p) {
   const qty = Number(p.quantity_litres) || 0;
@@ -629,15 +644,17 @@ function savePurchase(p) {
   if (qty <= 0) throw new Error("Quantity must be greater than 0.");
   if (price <= 0) throw new Error("Price per litre must be greater than 0.");
   const total = round2(qty * price);
+  const supplier = (p.supplier || "").trim() || null;
+  const notes = (p.supplier_notes || "").trim() || null;
   if (p.id) {
-    run("UPDATE purchases SET date=?, quantity_litres=?, price_per_litre=?, total_cost=?, supplier_notes=? WHERE id=?", [
-      p.date, qty, price, total, p.supplier_notes || null, p.id,
+    run("UPDATE purchases SET date=?, quantity_litres=?, price_per_litre=?, total_cost=?, supplier=?, supplier_notes=? WHERE id=?", [
+      p.date, qty, price, total, supplier, notes, p.id,
     ]);
     return get("SELECT * FROM purchases WHERE id = ?", [p.id]);
   }
   const id = insert(
-    "INSERT INTO purchases (date, quantity_litres, price_per_litre, total_cost, supplier_notes) VALUES (?,?,?,?,?)",
-    [p.date, qty, price, total, p.supplier_notes || null]
+    "INSERT INTO purchases (date, quantity_litres, price_per_litre, total_cost, supplier, supplier_notes) VALUES (?,?,?,?,?,?)",
+    [p.date, qty, price, total, supplier, notes]
   );
   return get("SELECT * FROM purchases WHERE id = ?", [id]);
 }
@@ -784,15 +801,17 @@ function dashboard() {
  * One row per day for a range: how much milk was bought (litres + cost) and,
  * for comparison, how much was delivered to clients that day.
  */
-function dailyMilkSheet(from, to) {
+function dailyMilkSheet(from, to, supplier) {
   ensureFresh();
+  const supFilter = supplier && supplier !== "all" ? " AND IFNULL(supplier,'') = ?" : "";
+  const supParam = supFilter ? [supplier] : [];
   const buys = all(
     `SELECT date,
             SUM(quantity_litres) litres,
             SUM(total_cost) cost,
             COUNT(*) n
-     FROM purchases WHERE date BETWEEN ? AND ? GROUP BY date`,
-    [from, to]
+     FROM purchases WHERE date BETWEEN ? AND ?${supFilter} GROUP BY date`,
+    [from, to, ...supParam]
   );
   const sells = all(
     `SELECT date, SUM(quantity_litres) litres, SUM(total_amount) amount
@@ -831,7 +850,21 @@ function dailyMilkSheet(from, to) {
   );
   totals.avg_rate = totals.purchased_litres ? round2(totals.purchased_cost / totals.purchased_litres) : 0;
 
-  return { from, to, rows, totals, settings: getSettings() };
+  const bySupplier = all(
+    `SELECT COALESCE(NULLIF(supplier,''),'(no supplier)') supplier,
+            COUNT(*) n, SUM(quantity_litres) litres, SUM(total_cost) cost
+     FROM purchases WHERE date BETWEEN ? AND ?${supFilter}
+     GROUP BY COALESCE(NULLIF(supplier,''),'(no supplier)') ORDER BY cost DESC`,
+    [from, to, ...supParam]
+  ).map((r) => ({
+    supplier: r.supplier,
+    n: r.n,
+    litres: round2(r.litres),
+    cost: round2(r.cost),
+    avg_rate: r.litres ? round2(r.cost / r.litres) : 0,
+  }));
+
+  return { from, to, supplier: supplier || "all", rows, totals, by_supplier: bySupplier, settings: getSettings() };
 }
 
 /* ------------------------------------------------------------------ */
@@ -981,7 +1014,7 @@ module.exports = {
   listClients, getClient, saveClient, deleteClient,
   listEntries, saveEntry, deleteEntry, saveDailyRound, dailyRound,
   listPayments, savePayment, deletePayment,
-  listPurchases, savePurchase, deletePurchase,
+  listPurchases, savePurchase, deletePurchase, listSuppliers,
   listExpenses, saveExpense, deleteExpense,
   profitLoss, dashboard, clientStatement, dailyMilkSheet,
   listInvoices, invoicePreview, createInvoice, getInvoice, deleteInvoice,
