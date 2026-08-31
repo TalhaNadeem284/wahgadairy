@@ -303,7 +303,7 @@ VIEWS.dashboard = async (main) => {
     kpi("Active clients", String(d.active_clients)),
   ]));
   main.append(el("div", { class: "mini", style: "margin-top:8px" },
-    "“Operating profit” already counts free samples as a cost. Home milk (GHAR) is your own use — shown separately, not in the profit. Operating profit + home milk value = " + money(d.month_total_benefit) + " total benefit this month."
+    "Home milk (GHAR) is your own use — its milk cost is taken out of the business and it's shown separately, valued at your selling price. Operating profit + home milk value = " + money(d.month_total_benefit) + " total benefit this month."
   ));
   main.append(el("div", { class: "card", style: "margin-top:18px" }, [
     el("h2", { text: "Quick actions" }),
@@ -1138,34 +1138,42 @@ VIEWS.expenses = async (main) => {
       rpc(A.homeMilkList({ from: state.from, to: state.to, kind: "sample" })),
     ]);
     const sampleRate = parseFloat(SETTINGS.sample_rate) || 205;
-    // synthetic sample-milk rows so they're visible right here in the list
-    const showSamples = state.category === "all" || state.category === "sample milk";
-    const sampleRows = showSamples
-      ? samples.filter((s) => s.litres > 0).map((s) => ({
-          _sample: true, _id: s.id, date: s.date, category: "sample milk",
-          amount: round2(s.litres * sampleRate), litres: s.litres,
-          notes: `${litres(s.litres)} given free @ ${money(sampleRate)}/L`,
-        }))
-      : [];
-    const rows = [...real, ...sampleRows].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-    const tot = rows.reduce((a, r) => a + r.amount, 0);
+    const tot = real.reduce((a, r) => a + r.amount, 0);
     container.innerHTML = "";
+
+    // Sample milk — shown here for tracking, but it is NOT an expense: the milk
+    // was already paid for as a purchase, so its cost is in the milk cost.
+    const showSamples = state.category === "all" || state.category === "sample milk";
+    const sam = showSamples ? samples.filter((s) => s.litres > 0).sort((a, b) => b.date.localeCompare(a.date)) : [];
+    if (sam.length) {
+      const totL = sam.reduce((a, s) => a + s.litres, 0);
+      const card = el("div", { class: "card", style: "margin-bottom:14px" });
+      card.append(el("h2", { text: "🧪 Sample milk given (for tracking — not an expense)" }));
+      card.append(el("div", { class: "sub", text: `This milk is already paid for in your purchases, so it does NOT reduce profit again. ${litres(totL)} given this period ≈ ${money(totL * sampleRate)} at ${money(sampleRate)}/L.` }));
+      card.append(dataTable([
+        { header: "Date", key: "date" },
+        { header: "Litres given free", num: true, render: (s) => litres(s.litres) },
+        { header: "≈ Value", num: true, render: (s) => money(s.litres * sampleRate) },
+        { header: "", render: (s) => el("button", { class: "btn sm ghost", onclick: (e) => { e.stopPropagation(); sampleMilkModal(s.date, s.litres, load); } }, "edit") },
+      ], sam, {
+        onRowClick: (s) => sampleMilkModal(s.date, s.litres, load),
+        footer: [{ text: `${sam.length} days` }, { text: litres(totL), num: true }, { text: money(totL * sampleRate), num: true }, { text: "" }],
+        empty: "—",
+      }));
+      container.append(card);
+    }
+
     container.append(dataTable([
       { header: "Date", key: "date" },
-      { header: "Category", render: (r) => el("span", { class: r._sample ? "badge blue" : "badge gray", text: titleCase(r.category) }) },
+      { header: "Category", render: (r) => el("span", { class: "badge gray", text: titleCase(r.category) }) },
       { header: "Amount", num: true, render: (r) => el("strong", { text: money(r.amount) }) },
       { header: "Notes", key: "notes" },
-      { header: "", render: (r) => r._sample
-          ? el("span", { class: "mini", text: "auto" })
-          : el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this expense?")) { await rpc(A.expenseDelete(r.id)); toast("Deleted", "ok"); load(); } } }, "✕") },
-    ], rows, {
-      onRowClick: (r) => r._sample ? sampleMilkModal(r.date, r.litres, load) : expenseModal(r, load),
+      { header: "", render: (r) => el("button", { class: "btn sm ghost", onclick: async (e) => { e.stopPropagation(); if (await confirmBox("Delete this expense?")) { await rpc(A.expenseDelete(r.id)); toast("Deleted", "ok"); load(); } } }, "✕") },
+    ], real, {
+      onRowClick: (r) => expenseModal(r, load),
       footer: [{ text: "Total" }, { text: "" }, { text: money(tot), num: true }, { text: "" }, { text: "" }],
       empty: "No expenses for this period.",
     }));
-    if (showSamples && sampleRows.length) {
-      container.append(el("div", { class: "mini", style: "margin-top:8px", text: "“sample milk” rows are calculated from the litres you enter on Daily Entry × the sample rate in Settings — click one to change the litres for that day." }));
-    }
   }
   await load();
 };
@@ -1235,28 +1243,28 @@ VIEWS.pl = async (main) => {
       kpi("Revenue (milk billed)", money(d.revenue)),
       kpi("Cost of milk sold (est.)", money(d.costMilkSold)),
       kpi("Margin on sales", money(d.marginOnSales), d.marginOnSales >= 0 ? "good" : "bad"),
-      kpi("Expenses (incl. samples)", money(d.expensesWithSamples), "bad"),
+      kpi("Expenses", money(d.totalExpenses), "bad"),
       kpi("Operating profit", money(d.operatingProfit), d.operatingProfit >= 0 ? "good" : "bad"),
       kpi("Litres sold / bought", litres(d.litresSold) + " / " + litres(d.litresBought)),
     ]));
 
     container.append(el("div", { class: "card", style: "margin-top:14px" }, [
-      el("h2", { text: "Home milk (GHAR) & samples" }),
+      el("h2", { text: "Home milk (GHAR) & samples — kept separate" }),
       el("div", { class: "row", style: "gap:28px;margin-top:10px;flex-wrap:wrap" }, [
         el("div", {}, [
           el("div", { class: "mini", text: "🏠 Home use (GHAR)" }),
-          el("strong", { text: `${litres(d.homeMilkLitres)} · ${money(d.homeMilkValue)}` }),
-          el("div", { class: "mini", text: "valued at avg sale price " + money2(d.avgSalePrice) }),
+          el("strong", { text: `${litres(d.homeMilkLitres)}` }),
+          el("div", { class: "mini", text: `worth ${money(d.homeMilkValue)} at selling price · milk cost ${money(d.homeMilkCost)} taken out of the business` }),
         ]),
         el("div", {}, [
-          el("div", { class: "mini", text: "🧪 Free samples" }),
-          el("strong", { text: `${litres(d.sampleMilkLitres)} · ${money(d.sampleMilkCost)}` }),
-          el("div", { class: "mini", text: `${litres(1)} = ${money(d.sampleRate)} (Settings)` }),
+          el("div", { class: "mini", text: "🧪 Free samples given" }),
+          el("strong", { text: `${litres(d.sampleMilkLitres)}` }),
+          el("div", { class: "mini", text: `cost ${money(d.sampleMilkCost)} — already inside "Cost of milk sold" above · ${money(d.sampleMilkValue)} of sales given up` }),
         ]),
       ]),
       el("div", { class: "row between", style: "margin-top:14px;border-top:2px solid var(--border);padding-top:12px;flex-wrap:wrap;gap:12px" }, [
-        el("div", { class: "mini", style: "max-width:60%" },
-          "Samples are counted as a marketing cost inside operating profit. Home milk (GHAR) is NOT in operating profit — it's your own consumption, shown here as a separate benefit."),
+        el("div", { class: "mini", style: "max-width:58%" },
+          "Sample milk is milk you already bought — its cost is in the milk cost, so it is NOT deducted again. Home milk (GHAR) is your own use: its milk cost is taken out of the business and it's shown here valued at what you'd have sold it for."),
         el("div", { style: "text-align:right" }, [
           el("div", { class: "mini", text: "Operating profit + home milk value" }),
           el("strong", { class: d.totalBenefit >= 0 ? "badge green" : "badge red", style: "font-size:15px", text: money(d.totalBenefit) + "  total benefit" }),
@@ -1651,7 +1659,7 @@ VIEWS.settings = async (main) => {
       field("Name", nameI), field("Address", addrI), field("Phone", phoneI),
       field("Currency label", curI), field("Statement / invoice footer line", footI),
       el("div", { class: "row" }, [field("Invoice number prefix", prefixI), field("Next invoice number", nextNoI)]),
-      el("div", { class: "row" }, [field("Sample milk rate (" + currency() + " / litre)", sampleRateI)]),
+      el("div", { class: "row" }, [field("Sample milk value (" + currency() + " / litre) — for tracking; not deducted from profit", sampleRateI)]),
     ]),
     el("button", { class: "btn", style: "margin-top:14px", onclick: async () => {
       try {

@@ -813,40 +813,39 @@ function profitLoss(from, to) {
     "SELECT COALESCE(SUM(quantity_litres),0) t FROM purchases WHERE date BETWEEN ? AND ?", [from, to]
   ).t);
 
-  // "Sold basis": what the delivered milk actually cost.
-  //  - If you sold more than you bought, the extra came from your own animals
-  //    (free), so the cost of milk sold is simply everything you spent on milk.
-  //  - Otherwise value the delivered litres at the average purchase rate, so a
-  //    period isn't a huge loss just because stock / home-use milk was bought.
-  const avgPurchaseRate = litresBought ? round2(cogs / litresBought) : 0;
-  const costMilkSold = litresSold >= litresBought ? cogs : round2(litresSold * avgPurchaseRate);
-  const marginOnSales = round2(revenue - costMilkSold);
-
-  // Home milk (GHAR): used in the owner's own house — not sold, kept OUT of
-  // operating profit but valued separately as a benefit (at avg sale price).
-  // Sample milk: given free to clients — a marketing cost, valued at the
-  // settings sample_rate and added to expenses so it DOES hit profit.
   const avgSalePrice = litresSold ? round2(revenue / litresSold) : 0;
-  const sampleRate = Number((get("SELECT value FROM settings WHERE key='sample_rate'") || {}).value) || 205;
+  const sampleRate = Number((get("SELECT value FROM settings WHERE key='sample_rate'") || {}).value) || 0;
   const homeMilkLitres = round2(get(
     "SELECT COALESCE(SUM(litres),0) t FROM home_milk WHERE kind='home' AND date BETWEEN ? AND ?", [from, to]
   ).t);
   const sampleMilkLitres = round2(get(
     "SELECT COALESCE(SUM(litres),0) t FROM home_milk WHERE kind='sample' AND date BETWEEN ? AND ?", [from, to]
   ).t);
-  const homeMilkValue = round2(homeMilkLitres * avgSalePrice);
-  const sampleMilkCost = round2(sampleMilkLitres * sampleRate);
 
-  const expensesWithSamples = round2(totalExpenses + sampleMilkCost);
-  const operatingProfit = round2(marginOnSales - expensesWithSamples);
+  // The milk you paid for (cogs) is ONE pot. Sample milk is milk you ALREADY
+  // bought — its cost is already inside cogs, so it must NOT be subtracted
+  // again. We only carve out the home (GHAR) share as the owner's own use.
+  // Blended per-litre cost = total spend / all milk that came in.
+  const milkDisposed = round2(litresSold + sampleMilkLitres + homeMilkLitres);
+  const milkIn = Math.max(litresBought, milkDisposed);
+  const avgPurchaseRate = milkIn > 0 ? round2(cogs / milkIn) : 0;
+  const homeMilkCost = round2(homeMilkLitres * avgPurchaseRate);       // owner's draw, out of P&L
+  const costMilkSold = round2(Math.max(0, cogs - homeMilkCost));       // sold + sampled milk cost
+  const marginOnSales = round2(revenue - costMilkSold);
+  const operatingProfit = round2(marginOnSales - totalExpenses);
+
+  // Sample milk — informational only (already inside costMilkSold):
+  const sampleMilkCost = round2(sampleMilkLitres * (sampleRate || avgPurchaseRate)); // what that milk cost
+  const sampleMilkValue = round2(sampleMilkLitres * avgSalePrice);                   // revenue given up
+  // Home milk (GHAR) — the owner's benefit, valued at retail:
+  const homeMilkValue = round2(homeMilkLitres * avgSalePrice);
+  const expensesWithSamples = totalExpenses; // kept name for callers; samples are NOT added
   const totalBenefit = round2(operatingProfit + homeMilkValue);
 
   const byCategory = all(
-    "SELECT category, COALESCE(SUM(amount),0) amount, COUNT(*) n FROM expenses WHERE date BETWEEN ? AND ? GROUP BY category",
+    "SELECT category, COALESCE(SUM(amount),0) amount, COUNT(*) n FROM expenses WHERE date BETWEEN ? AND ? GROUP BY category ORDER BY amount DESC",
     [from, to]
   );
-  if (sampleMilkCost > 0) byCategory.push({ category: "sample milk", amount: sampleMilkCost, n: 0, auto: true });
-  byCategory.sort((a, b) => b.amount - a.amount);
 
   // per-day series
   const dayRev = Object.fromEntries(all(
@@ -858,14 +857,11 @@ function profitLoss(from, to) {
   const dayExp = Object.fromEntries(all(
     "SELECT date, SUM(amount) v FROM expenses WHERE date BETWEEN ? AND ? GROUP BY date", [from, to]
   ).map((r) => [r.date, r.v]));
-  const daySample = Object.fromEntries(all(
-    "SELECT date, SUM(litres) v FROM home_milk WHERE kind='sample' AND date BETWEEN ? AND ? GROUP BY date", [from, to]
-  ).map((r) => [r.date, r.v]));
-  const dates = [...new Set([...Object.keys(dayRev), ...Object.keys(dayCogs), ...Object.keys(dayExp), ...Object.keys(daySample)])].sort();
+  const dates = [...new Set([...Object.keys(dayRev), ...Object.keys(dayCogs), ...Object.keys(dayExp)])].sort();
   const days = dates.map((d) => {
     const rev = round2(dayRev[d] || 0);
     const cg = round2(dayCogs[d] || 0);
-    const ex = round2((dayExp[d] || 0) + (daySample[d] || 0) * sampleRate);
+    const ex = round2(dayExp[d] || 0);
     return { date: d, revenue: rev, cogs: cg, expenses: ex, net: round2(rev - cg - ex) };
   });
 
@@ -873,8 +869,10 @@ function profitLoss(from, to) {
     from, to, revenue, cogs, grossProfit, totalExpenses, netProfit,
     litresSold, litresBought, avgPurchaseRate, costMilkSold, marginOnSales,
     operatingProfit, expensesWithSamples,
-    avgSalePrice, sampleRate,
-    homeMilkLitres, homeMilkValue, sampleMilkLitres, sampleMilkCost, totalBenefit,
+    avgSalePrice,
+    homeMilkLitres, homeMilkValue, homeMilkCost,
+    sampleMilkLitres, sampleMilkCost, sampleMilkValue,
+    totalBenefit,
     byCategory, days,
   };
 }
