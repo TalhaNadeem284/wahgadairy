@@ -1,0 +1,50 @@
+{
+  "name": "wahga-dairy-desktop",
+  "version": "1.0.0",
+  "description": "Offline desktop app for Wahga Dairy Farm - daily milk deliveries, per-client pricing, purchases, expenses, profit/loss and printable client statements. Shared SQLite database (cloud-synced folder).",
+  "main": "main.js",
+  "author": "Musa Nadeem",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-packager . \"Wahga Dairy Farm\" --platform=win32 --arch=x64 --out=dist --overwrite --app-version=1.0.0 --prune=true --ignore=\"^/(dist$|scratch)\"",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.wahgadairy.desktop",
+    "productName": "Wahga Dairy Farm",
+    "copyright": "Wahga Dairy Farm",
+    "artifactName": "Wahga-Dairy-Farm-Setup-${version}.${ext}",
+    "asarUnpack": [
+      "node_modules/sql.js/dist/sql-wasm.wasm"
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "db.js",
+      "config.js",
+      "renderer/**/*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Wahga Dairy Farm",
+      "uninstallDisplayName": "Wahga Dairy Farm"
+    }
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "sql.js": "^1.12.0"
+  }
+}
