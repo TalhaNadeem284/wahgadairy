@@ -228,18 +228,31 @@ async function open(targetPath) {
   fs.mkdirSync(dir, { recursive: true });
 
   dbFile = file;
+  let seededFrom = null;
 
   if (fs.existsSync(dbFile)) {
     loadFromDisk();
   } else {
-    db = new SQL.Database();
-    db.run("PRAGMA foreign_keys = ON");
+    // First time at this location: start from the database that shipped with
+    // the app (current clients, deliveries, purchases, expenses…) if present.
+    const seedPath = path.join(__dirname, "seed", "wahga-dairy-seed.db");
+    try {
+      if (fs.existsSync(seedPath)) {
+        fs.copyFileSync(seedPath, dbFile);
+        loadFromDisk();
+        seededFrom = "seed";
+      }
+    } catch { /* fall through to an empty database */ }
+    if (!db) {
+      db = new SQL.Database();
+      db.run("PRAGMA foreign_keys = ON");
+    }
   }
 
   migrate();
   seedSettings();
   persist();
-  return { path: dbFile, created: true };
+  return { path: dbFile, seededFrom };
 }
 
 function isOpen() {

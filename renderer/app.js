@@ -253,26 +253,60 @@ async function showSetup(reason, dbPath) {
   const main = $("#main");
   main.className = "center";
   main.innerHTML = "";
-  const box = el("div", { class: "card setup-box" }, [
-    el("div", { class: "logo-big", text: "🥛" }),
-    el("h1", { text: "Wahga Dairy Farm", style: "margin:0 0 6px" }),
-    el("p", {
-      style: "color:var(--muted);margin:0 0 18px",
-      text: reason === "folder-missing"
-        ? "The shared database folder isn't available right now (" + (dbPath || "") + "). Make sure your cloud drive is running, then reopen — or choose the database again below."
-        : "Put the database file in a folder that syncs across your computers (Google Drive, OneDrive or Dropbox). Every PC running this app should point at the same folder.",
-    }),
-    el("button", { class: "btn", onclick: pickFolder }, "📁  Choose shared folder (new database)"),
-    el("button", { class: "btn secondary", onclick: pickExisting }, "Open existing database file"),
-  ]);
+  const box = el("div", { class: "card setup-box" });
+  box.append(el("div", { class: "logo-big", text: "🥛" }));
+  box.append(el("h1", { text: "Wahga Dairy Farm", style: "margin:0 0 6px" }));
+  box.append(el("p", {
+    style: "color:var(--muted);margin:0 0 18px",
+    text: reason === "folder-missing"
+      ? "The database folder isn't available right now (" + (dbPath || "") + "). Make sure your cloud drive (Google Drive / OneDrive) is running, then reopen — or choose it again below."
+      : "Choose where the database lives. To share data with another computer, keep it in a Google Drive / OneDrive / Dropbox folder that syncs to both.",
+  }));
+
+  const clouds = await rpc(A.dbCloudFolders()).catch(() => []);
+  const shared = clouds.find((c) => c.existingDb);
+  if (shared) {
+    box.append(el("div", { class: "inline-note", style: "margin-bottom:12px", text: `Found a shared database in ${shared.name}.` }));
+    box.append(el("button", { class: "btn", onclick: () => openFileAt(shared.existingDb) },
+      `☁️  Open the shared database from ${shared.name}`));
+  }
+  for (const c of clouds) {
+    if (c.existingDb) continue;
+    box.append(el("button", { class: shared ? "btn secondary" : "btn", onclick: () => useCloud(c) },
+      `☁️  Put a new database in ${c.name}`));
+  }
+  box.append(el("button", { class: "btn secondary", onclick: pickExisting },
+    "📂  Open an existing database file"));
+  box.append(el("button", { class: "btn ghost", onclick: pickFolder },
+    "Choose another folder / new database"));
+
+  box.append(el("div", { class: "mini", style: "margin-top:14px" },
+    clouds.length
+      ? "To share with another computer: on one PC use “Put a new database in …”, then on the other install the app — it will find that synced database automatically."
+      : "No cloud drive found. Install Google Drive for Desktop or OneDrive for sharing, or just pick a folder for local use."));
   main.append(box);
 }
 
+async function openFileAt(filePath) {
+  try {
+    await rpc(A.dbOpenPath(filePath));
+    toast("Opened the shared database", "ok");
+    await boot();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function useCloud(c) {
+  try {
+    const r = await rpc(A.dbUseCloud(c.path));
+    toast((r.seededFrom ? "Database created with current data in " : "Database ready in ") + c.name, "ok");
+    await boot();
+  } catch (e) { toast(e.message, "err"); }
+}
 async function pickFolder() {
   try {
     const r = await rpc(A.dbPick());
     if (r.canceled) return;
-    toast("Database ready: " + r.path, "ok");
+    toast((r.seededFrom ? "Database created with current data: " : "Database ready: ") + r.path, "ok");
     await boot();
   } catch (e) { toast(e.message, "err"); }
 }
@@ -1707,23 +1741,56 @@ VIEWS.settings = async (main) => {
   ]);
   main.append(shopCard);
 
-  main.append(el("div", { class: "card", style: "margin-top:18px" }, [
-    el("h2", { text: "Shared database" }),
-    el("div", { class: "sub", text: "This file is what syncs between your computers. Keep it in a Google Drive / OneDrive / Dropbox folder." }),
+  const clouds = await rpc(A.dbCloudFolders()).catch(() => []);
+  const inCloud = clouds.some((c) => (status.path || "").toLowerCase().startsWith(c.path.toLowerCase()));
+  const syncLine = el("div", { class: "mini", style: "margin-top:8px" });
+  async function refreshSync() {
+    try {
+      const r = await rpc(A.dbReload());
+      const when = r.mtime ? new Date(r.mtime).toLocaleString() : "unknown";
+      syncLine.textContent = `Database last changed: ${when}` + (r.reloaded ? " — just pulled a newer copy." : "");
+    } catch (e) { syncLine.textContent = e.message; }
+  }
+  refreshSync();
+
+  const dbCard = el("div", { class: "card", style: "margin-top:18px" }, [
+    el("h2", { text: "Database & sharing" }),
     el("div", { class: "inline-note", text: status.path || "Not set" }),
+    el("div", { class: "mini", style: "margin-top:6px" },
+      inCloud
+        ? "✅ This database is inside a synced cloud folder — it syncs to your other computer automatically."
+        : "⚠️ This database is in a normal local folder — it does NOT sync anywhere. Move it into a cloud folder below to share with another computer."),
+    syncLine,
     el("div", { class: "row", style: "margin-top:12px" }, [
+      el("button", { class: "btn secondary", onclick: refreshSync }, "🔄  Check for updates now"),
       el("button", { class: "btn secondary", onclick: async () => { try { await rpc(A.dbOpenFolder()); } catch (e) { toast(e.message, "err"); } } }, "📂  Show file in folder"),
       el("button", { class: "btn secondary", onclick: async () => {
         try { const r = await rpc(A.dbBackup()); if (!r.canceled) toast("Backup saved: " + r.path, "ok"); }
         catch (e) { toast(e.message, "err"); }
       } }, "💾  Save a backup copy"),
-      el("button", { class: "btn ghost", onclick: async () => {
-        if (await confirmBox("Point this computer at a different database folder? The current data stays where it is.")) pickFolder();
-      } }, "Change folder"),
-      el("button", { class: "btn ghost", onclick: pickExisting }, "Open a different database file"),
     ]),
-    el("div", { class: "mini", style: "margin-top:12px", text: "Tip: to avoid clashes, let one person finish entering a day's round before another opens the app to edit the same day." }),
+  ]);
+  if (!inCloud && clouds.length) {
+    dbCard.append(el("div", { class: "row", style: "margin-top:10px" },
+      clouds.map((c) => el("button", { class: "btn", onclick: async () => {
+        if (!(await confirmBox(`Move this database (with ALL current data) into ${c.name} and use it from there? A “Wahga Dairy Farm” folder is created inside ${c.name}. Then on the other computer, install the app and open that same synced file.`))) return;
+        try {
+          const r = await rpc(A.dbMoveTo(c.path));
+          toast("Moved to " + c.name + " — old copy left at " + r.from, "ok");
+          go("settings");
+        } catch (e) { toast(e.message, "err"); }
+      } }, `☁️  Move to ${c.name}`))
+    ));
+    dbCard.append(el("div", { class: "mini", style: "margin-top:6px", text: "This copies your current database (all clients, deliveries, everything) into the cloud folder. Give the cloud drive a minute to finish uploading before opening the app on the other computer." }));
+  }
+  dbCard.append(el("div", { class: "row", style: "margin-top:12px" }, [
+    el("button", { class: "btn ghost", onclick: async () => {
+      if (await confirmBox("Point this computer at a different database folder?")) pickFolder();
+    } }, "Choose another folder" ),
+    el("button", { class: "btn ghost", onclick: pickExisting }, "Open a different database file"),
   ]));
+  dbCard.append(el("div", { class: "mini", style: "margin-top:12px", text: "Tip: to avoid clashes, let one person finish entering a day's round before another edits the same day. Your cloud drive keeps old versions as a safety net." }));
+  main.append(dbCard);
 
   main.append(el("div", { class: "mini", style: "margin-top:18px", text: "Wahga Dairy Farm · v" + (META.appVersion || "1.0.0") }));
 };

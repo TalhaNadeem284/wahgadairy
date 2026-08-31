@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld("api", {
   dbPickExisting: () => invoke("db:pickExisting"),
   dbOpenFolder: () => invoke("db:openFolder"),
   dbBackup: () => invoke("db:backup"),
+  dbCloudFolders: () => invoke("db:cloudFolders"),
+  dbUseCloud: (cloudPath) => invoke("db:useCloud", cloudPath),
+  dbOpenPath: (p) => invoke("db:openPath", p),
+  dbMoveTo: (cloudPath) => invoke("db:moveTo", cloudPath),
+  dbReload: () => invoke("db:reload"),
   onExternalChange: (cb) => {
     const listener = () => cb();
     ipcRenderer.on("db:external-change", listener);

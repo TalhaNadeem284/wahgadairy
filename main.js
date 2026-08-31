@@ -104,7 +104,7 @@ handle("db:pick", async () => {
   if (res.canceled || !res.filePaths[0]) return { canceled: true };
   const info = await db.open(res.filePaths[0]);
   config.set("dbPath", info.path);
-  return { canceled: false, path: info.path };
+  return { canceled: false, path: info.path, seededFrom: info.seededFrom };
 });
 
 handle("db:pickExisting", async () => {
@@ -123,6 +123,77 @@ handle("db:openFolder", () => {
   if (!db.isOpen()) throw new Error("No database open.");
   shell.showItemInFolder(db.currentPath());
   return true;
+});
+
+/* ---------- cloud folder detection + one-click setup ---------- */
+function detectCloudFolders() {
+  const home = app.getPath("home");
+  const candidates = [
+    { name: "Google Drive", dirs: [path.join(home, "Google Drive"), path.join(home, "My Drive"), "G:\\My Drive", "G:\\Shared drives"] },
+    { name: "OneDrive", dirs: [process.env.OneDrive, process.env.OneDriveConsumer, process.env.OneDriveCommercial, path.join(home, "OneDrive")].filter(Boolean) },
+    { name: "Dropbox", dirs: [path.join(home, "Dropbox")] },
+  ];
+  const found = [];
+  for (const c of candidates) {
+    for (const d of c.dirs) {
+      try {
+        if (d && fs.existsSync(d) && fs.statSync(d).isDirectory()) {
+          // Has a shared Wahga DB already synced into it?
+          let existingDb = null;
+          const guess = path.join(d, "Wahga Dairy Farm", "wahga-dairy.db");
+          if (fs.existsSync(guess)) existingDb = guess;
+          found.push({ name: c.name, path: d, existingDb });
+          break;
+        }
+      } catch { /* ignore */ }
+    }
+  }
+  return found;
+}
+
+handle("db:cloudFolders", () => detectCloudFolders());
+
+// Open a database at an exact path (no dialog) — used for the auto-detected shared file.
+handle("db:openPath", async (p) => {
+  if (!p || !fs.existsSync(p)) throw new Error("That database file isn't there.");
+  const info = await db.open(p);
+  config.set("dbPath", info.path);
+  return { path: info.path, seededFrom: info.seededFrom };
+});
+
+// Create (seeded) the database inside a cloud folder in one click.
+handle("db:useCloud", async (cloudPath) => {
+  if (!cloudPath || !fs.existsSync(cloudPath)) throw new Error("That cloud folder isn't available.");
+  const folder = path.join(cloudPath, "Wahga Dairy Farm");
+  fs.mkdirSync(folder, { recursive: true });
+  const info = await db.open(folder); // db.open seeds from seed/ if the file is new
+  config.set("dbPath", info.path);
+  return { path: info.path, seededFrom: info.seededFrom };
+});
+
+// Force a re-read from disk (e.g. right after the cloud app synced a new copy).
+handle("db:reload", () => {
+  if (!db.isOpen()) throw new Error("No database open.");
+  const reloaded = db.ensureFresh();
+  return { reloaded, mtime: db.fileMtime(db.currentPath()), path: db.currentPath() };
+});
+
+// Move the CURRENT database (with all its data) into a cloud folder and use it from there.
+handle("db:moveTo", async (cloudPath) => {
+  requireDb();
+  if (!cloudPath || !fs.existsSync(cloudPath)) throw new Error("That cloud folder isn't available.");
+  db.ensureFresh();
+  const src = db.currentPath();
+  const folder = path.join(cloudPath, "Wahga Dairy Farm");
+  fs.mkdirSync(folder, { recursive: true });
+  const dest = path.join(folder, "wahga-dairy.db");
+  if (fs.existsSync(dest)) {
+    throw new Error("A database already exists there. Use “Open a different database file” to switch to it instead.");
+  }
+  fs.copyFileSync(src, dest);
+  const info = await db.open(dest);
+  config.set("dbPath", info.path);
+  return { path: info.path, from: src };
 });
 
 handle("db:backup", async () => {
