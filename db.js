@@ -723,11 +723,13 @@ function profitLoss(from, to) {
     "SELECT COALESCE(SUM(quantity_litres),0) t FROM purchases WHERE date BETWEEN ? AND ?", [from, to]
   ).t);
 
-  // "Sold basis": value only the milk that was actually delivered to clients,
-  // at the period's average purchase rate. Avoids a period looking like a huge
-  // loss just because stock / home-use milk was bought in it.
+  // "Sold basis": what the delivered milk actually cost.
+  //  - If you sold more than you bought, the extra came from your own animals
+  //    (free), so the cost of milk sold is simply everything you spent on milk.
+  //  - Otherwise value the delivered litres at the average purchase rate, so a
+  //    period isn't a huge loss just because stock / home-use milk was bought.
   const avgPurchaseRate = litresBought ? round2(cogs / litresBought) : 0;
-  const costMilkSold = round2(litresSold * avgPurchaseRate);
+  const costMilkSold = litresSold >= litresBought ? cogs : round2(litresSold * avgPurchaseRate);
   const marginOnSales = round2(revenue - costMilkSold);
   const operatingProfit = round2(marginOnSales - totalExpenses);
 
