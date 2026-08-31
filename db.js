@@ -330,6 +330,15 @@ function migrate() {
     );
     CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id);
     CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(issued_date);
+    CREATE TABLE IF NOT EXISTS home_milk (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'home',   -- 'home' (GHAR) | 'sample'
+      litres REAL NOT NULL DEFAULT 0,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_home_milk_date_kind ON home_milk(date, kind);
   `);
   // Columns added after the first release — safe on existing databases.
   ensureColumn("clients", "default_litres", "REAL NOT NULL DEFAULT 0");
@@ -357,6 +366,7 @@ function seedSettings() {
     currency: "Rs",
     invoice_prefix: "INV-",
     next_invoice_no: "1",
+    sample_rate: "205",
   };
   for (const [k, v] of Object.entries(defaults)) {
     if (!get("SELECT value FROM settings WHERE key = ?", [k])) {
@@ -701,6 +711,49 @@ function deletePurchase(id) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  home / sample milk (not sold — GHAR)                               */
+/* ------------------------------------------------------------------ */
+function listHomeMilk(filter = {}) {
+  ensureFresh();
+  const where = [];
+  const params = [];
+  if (filter.from) { where.push("date >= ?"); params.push(filter.from); }
+  if (filter.to) { where.push("date <= ?"); params.push(filter.to); }
+  if (filter.kind) { where.push("kind = ?"); params.push(filter.kind); }
+  const clause = where.length ? "WHERE " + where.join(" AND ") : "";
+  return all(`SELECT * FROM home_milk ${clause} ORDER BY date DESC, kind LIMIT 800`, params);
+}
+function homeMilkForDate(date) {
+  ensureFresh();
+  const rows = all("SELECT kind, litres FROM home_milk WHERE date = ?", [date]);
+  const out = { home: 0, sample: 0 };
+  for (const r of rows) out[r.kind] = r.litres;
+  return out;
+}
+/** Upsert one date+kind. litres <= 0 removes the row. */
+function saveHomeMilk(h) {
+  const kind = h.kind === "sample" ? "sample" : "home";
+  const litres = Number(h.litres) || 0;
+  return tx(() => {
+    const existing = get("SELECT id FROM home_milk WHERE date = ? AND kind = ?", [h.date, kind]);
+    if (litres <= 0) {
+      if (existing) db.run("DELETE FROM home_milk WHERE id = ?", [existing.id]);
+      return { removed: !!existing };
+    }
+    if (existing) {
+      db.run("UPDATE home_milk SET litres = ?, note = ? WHERE id = ?", [litres, h.note || null, existing.id]);
+    } else {
+      db.run("INSERT INTO home_milk (date, kind, litres, note) VALUES (?,?,?,?)", [h.date, kind, litres, h.note || null]);
+    }
+    return { saved: true };
+  });
+}
+function deleteHomeMilk(id) {
+  run("DELETE FROM home_milk WHERE id = ?", [id]);
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
 /*  expenses                                                           */
 /* ------------------------------------------------------------------ */
 function listExpenses(filter = {}) {
@@ -768,12 +821,32 @@ function profitLoss(from, to) {
   const avgPurchaseRate = litresBought ? round2(cogs / litresBought) : 0;
   const costMilkSold = litresSold >= litresBought ? cogs : round2(litresSold * avgPurchaseRate);
   const marginOnSales = round2(revenue - costMilkSold);
-  const operatingProfit = round2(marginOnSales - totalExpenses);
+
+  // Home milk (GHAR): used in the owner's own house — not sold, kept OUT of
+  // operating profit but valued separately as a benefit (at avg sale price).
+  // Sample milk: given free to clients — a marketing cost, valued at the
+  // settings sample_rate and added to expenses so it DOES hit profit.
+  const avgSalePrice = litresSold ? round2(revenue / litresSold) : 0;
+  const sampleRate = Number((get("SELECT value FROM settings WHERE key='sample_rate'") || {}).value) || 205;
+  const homeMilkLitres = round2(get(
+    "SELECT COALESCE(SUM(litres),0) t FROM home_milk WHERE kind='home' AND date BETWEEN ? AND ?", [from, to]
+  ).t);
+  const sampleMilkLitres = round2(get(
+    "SELECT COALESCE(SUM(litres),0) t FROM home_milk WHERE kind='sample' AND date BETWEEN ? AND ?", [from, to]
+  ).t);
+  const homeMilkValue = round2(homeMilkLitres * avgSalePrice);
+  const sampleMilkCost = round2(sampleMilkLitres * sampleRate);
+
+  const expensesWithSamples = round2(totalExpenses + sampleMilkCost);
+  const operatingProfit = round2(marginOnSales - expensesWithSamples);
+  const totalBenefit = round2(operatingProfit + homeMilkValue);
 
   const byCategory = all(
-    "SELECT category, COALESCE(SUM(amount),0) amount, COUNT(*) n FROM expenses WHERE date BETWEEN ? AND ? GROUP BY category ORDER BY amount DESC",
+    "SELECT category, COALESCE(SUM(amount),0) amount, COUNT(*) n FROM expenses WHERE date BETWEEN ? AND ? GROUP BY category",
     [from, to]
   );
+  if (sampleMilkCost > 0) byCategory.push({ category: "sample milk", amount: sampleMilkCost, n: 0, auto: true });
+  byCategory.sort((a, b) => b.amount - a.amount);
 
   // per-day series
   const dayRev = Object.fromEntries(all(
@@ -785,17 +858,23 @@ function profitLoss(from, to) {
   const dayExp = Object.fromEntries(all(
     "SELECT date, SUM(amount) v FROM expenses WHERE date BETWEEN ? AND ? GROUP BY date", [from, to]
   ).map((r) => [r.date, r.v]));
-  const dates = [...new Set([...Object.keys(dayRev), ...Object.keys(dayCogs), ...Object.keys(dayExp)])].sort();
+  const daySample = Object.fromEntries(all(
+    "SELECT date, SUM(litres) v FROM home_milk WHERE kind='sample' AND date BETWEEN ? AND ? GROUP BY date", [from, to]
+  ).map((r) => [r.date, r.v]));
+  const dates = [...new Set([...Object.keys(dayRev), ...Object.keys(dayCogs), ...Object.keys(dayExp), ...Object.keys(daySample)])].sort();
   const days = dates.map((d) => {
     const rev = round2(dayRev[d] || 0);
     const cg = round2(dayCogs[d] || 0);
-    const ex = round2(dayExp[d] || 0);
+    const ex = round2((dayExp[d] || 0) + (daySample[d] || 0) * sampleRate);
     return { date: d, revenue: rev, cogs: cg, expenses: ex, net: round2(rev - cg - ex) };
   });
 
   return {
     from, to, revenue, cogs, grossProfit, totalExpenses, netProfit,
-    litresSold, litresBought, avgPurchaseRate, costMilkSold, marginOnSales, operatingProfit,
+    litresSold, litresBought, avgPurchaseRate, costMilkSold, marginOnSales,
+    operatingProfit, expensesWithSamples,
+    avgSalePrice, sampleRate,
+    homeMilkLitres, homeMilkValue, sampleMilkLitres, sampleMilkCost, totalBenefit,
     byCategory, days,
   };
 }
@@ -825,9 +904,12 @@ function dashboard() {
     today_revenue: todayRevenue,
     month_revenue: pl.revenue,
     month_collected: monthCollected,
-    month_expenses: pl.totalExpenses,
+    month_expenses: pl.expensesWithSamples,
     month_net_profit: pl.operatingProfit,
     month_litres_sold: pl.litresSold,
+    month_home_milk_litres: pl.homeMilkLitres,
+    month_home_milk_value: pl.homeMilkValue,
+    month_total_benefit: pl.totalBenefit,
     receivable,
     active_clients: activeClients,
   };
@@ -1054,6 +1136,7 @@ module.exports = {
   listEntries, saveEntry, deleteEntry, saveDailyRound, dailyRound,
   listPayments, savePayment, deletePayment, settlements,
   listPurchases, savePurchase, deletePurchase, listSuppliers,
+  listHomeMilk, homeMilkForDate, saveHomeMilk, deleteHomeMilk,
   listExpenses, saveExpense, deleteExpense,
   profitLoss, dashboard, clientStatement, dailyMilkSheet,
   listInvoices, invoicePreview, createInvoice, getInvoice, deleteInvoice,

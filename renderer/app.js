@@ -298,11 +298,12 @@ VIEWS.dashboard = async (main) => {
     kpi(`${monthName} cash collected`, money(d.month_collected), "good"),
     kpi(`${monthName} expenses`, money(d.month_expenses), "bad"),
     kpi(`${monthName} operating profit`, money(d.month_net_profit), d.month_net_profit >= 0 ? "good" : "bad"),
+    kpi(`Home milk (GHAR) ${monthName}`, `${litres(d.month_home_milk_litres)} · ${money(d.month_home_milk_value)}`),
     kpi("Outstanding (to receive)", money(d.receivable), d.receivable > 0 ? "bad" : "good"),
     kpi("Active clients", String(d.active_clients)),
   ]));
   main.append(el("div", { class: "mini", style: "margin-top:8px" },
-    "“Revenue (billed)” is the value of milk delivered — it includes today. “Cash collected” is payments actually received. “Operating profit” values milk at cost of what was sold, not everything bought."
+    "“Operating profit” already counts free samples as a cost. Home milk (GHAR) is your own use — shown separately, not in the profit. Operating profit + home milk value = " + money(d.month_total_benefit) + " total benefit this month."
   ));
   main.append(el("div", { class: "card", style: "margin-top:18px" }, [
     el("h2", { text: "Quick actions" }),
@@ -422,6 +423,25 @@ VIEWS.daily = async (main, params) => {
     }
 
     container.append(table);
+
+    // Home use (GHAR) + free samples for this date
+    const hm = await rpc(A.homeMilkForDate(date));
+    const homeI = input({ type: "number", min: "0", step: "0.25", value: hm.home || "", placeholder: "0", style: "width:90px" });
+    const sampI = input({ type: "number", min: "0", step: "0.25", value: hm.sample || "", placeholder: "0", style: "width:90px" });
+    async function saveHome(kind, elm) {
+      try { await rpc(A.homeMilkSave({ date, kind, litres: elm.value })); }
+      catch (e) { toast(e.message, "err"); }
+    }
+    homeI.addEventListener("change", () => saveHome("home", homeI));
+    sampI.addEventListener("change", () => saveHome("sample", sampI));
+    container.append(el("div", { class: "card", style: "margin-top:14px" }, [
+      el("div", { class: "row", style: "gap:24px;align-items:flex-end" }, [
+        field("🏠 Home use / GHAR (litres)", homeI),
+        field("🧪 Samples given free (litres)", sampI),
+        el("div", { class: "mini", style: "padding-bottom:8px" }, "Home milk is kept separate from profit; samples are counted as a marketing cost. Saved automatically."),
+      ]),
+    ]));
+
     container.append(el("div", { class: "row between", style: "margin-top:16px" }, [
       el("div", { class: "mini" }, ["Round total: ", totalCell, "  ·  ", countCell]),
       el("button", { class: "btn", onclick: save }, "💾  Save round"),
@@ -1109,9 +1129,19 @@ VIEWS.expenses = async (main) => {
 
   async function load() {
     container.innerHTML = "<div class='spin'>Loading…</div>";
-    const rows = await rpc(A.expensesList({ from: state.from, to: state.to, category: state.category }));
+    const [rows, samples] = await Promise.all([
+      rpc(A.expensesList({ from: state.from, to: state.to, category: state.category })),
+      rpc(A.homeMilkList({ from: state.from, to: state.to, kind: "sample" })),
+    ]);
     const tot = rows.reduce((a, r) => a + r.amount, 0);
+    const sampleL = samples.reduce((a, r) => a + r.litres, 0);
+    const sampleRate = parseFloat(SETTINGS.sample_rate) || 205;
     container.innerHTML = "";
+    if (sampleL > 0 && (state.category === "all" || state.category === "sample milk")) {
+      container.append(el("div", { class: "inline-note", style: "margin-bottom:12px" },
+        `🧪 Sample milk (auto): ${litres(sampleL)} × ${money(sampleRate)} = ${money(sampleL * sampleRate)} — counted as an expense in Profit & Loss. Set the daily litres on Daily Entry, the rate in Settings.`
+      ));
+    }
     container.append(dataTable([
       { header: "Date", key: "date" },
       { header: "Category", render: (r) => el("span", { class: "badge gray", text: titleCase(r.category) }) },
@@ -1172,9 +1202,33 @@ VIEWS.pl = async (main) => {
       kpi("Revenue (milk billed)", money(d.revenue)),
       kpi("Cost of milk sold (est.)", money(d.costMilkSold)),
       kpi("Margin on sales", money(d.marginOnSales), d.marginOnSales >= 0 ? "good" : "bad"),
-      kpi("Expenses", money(d.totalExpenses), "bad"),
+      kpi("Expenses (incl. samples)", money(d.expensesWithSamples), "bad"),
       kpi("Operating profit", money(d.operatingProfit), d.operatingProfit >= 0 ? "good" : "bad"),
       kpi("Litres sold / bought", litres(d.litresSold) + " / " + litres(d.litresBought)),
+    ]));
+
+    container.append(el("div", { class: "card", style: "margin-top:14px" }, [
+      el("h2", { text: "Home milk (GHAR) & samples" }),
+      el("div", { class: "row", style: "gap:28px;margin-top:10px;flex-wrap:wrap" }, [
+        el("div", {}, [
+          el("div", { class: "mini", text: "🏠 Home use (GHAR)" }),
+          el("strong", { text: `${litres(d.homeMilkLitres)} · ${money(d.homeMilkValue)}` }),
+          el("div", { class: "mini", text: "valued at avg sale price " + money2(d.avgSalePrice) }),
+        ]),
+        el("div", {}, [
+          el("div", { class: "mini", text: "🧪 Free samples" }),
+          el("strong", { text: `${litres(d.sampleMilkLitres)} · ${money(d.sampleMilkCost)}` }),
+          el("div", { class: "mini", text: `${litres(1)} = ${money(d.sampleRate)} (Settings)` }),
+        ]),
+      ]),
+      el("div", { class: "row between", style: "margin-top:14px;border-top:2px solid var(--border);padding-top:12px;flex-wrap:wrap;gap:12px" }, [
+        el("div", { class: "mini", style: "max-width:60%" },
+          "Samples are counted as a marketing cost inside operating profit. Home milk (GHAR) is NOT in operating profit — it's your own consumption, shown here as a separate benefit."),
+        el("div", { style: "text-align:right" }, [
+          el("div", { class: "mini", text: "Operating profit + home milk value" }),
+          el("strong", { class: d.totalBenefit >= 0 ? "badge green" : "badge red", style: "font-size:15px", text: money(d.totalBenefit) + "  total benefit" }),
+        ]),
+      ]),
     ]));
     container.append(el("div", { class: "card", style: "margin-top:14px" }, [
       el("h2", { text: "Milk purchased (all suppliers)" }),
@@ -1555,6 +1609,7 @@ VIEWS.settings = async (main) => {
   const footI = input({ value: s.statement_footer || "" });
   const prefixI = input({ value: s.invoice_prefix || "INV-", style: "width:120px" });
   const nextNoI = input({ type: "number", min: "1", value: s.next_invoice_no || "1", style: "width:120px" });
+  const sampleRateI = input({ type: "number", min: "0", step: "1", value: s.sample_rate || "205", style: "width:120px" });
 
   const shopCard = el("div", { class: "card" }, [
     el("h2", { text: "Shop / farm details" }),
@@ -1563,6 +1618,7 @@ VIEWS.settings = async (main) => {
       field("Name", nameI), field("Address", addrI), field("Phone", phoneI),
       field("Currency label", curI), field("Statement / invoice footer line", footI),
       el("div", { class: "row" }, [field("Invoice number prefix", prefixI), field("Next invoice number", nextNoI)]),
+      el("div", { class: "row" }, [field("Sample milk rate (" + currency() + " / litre)", sampleRateI)]),
     ]),
     el("button", { class: "btn", style: "margin-top:14px", onclick: async () => {
       try {
@@ -1571,6 +1627,7 @@ VIEWS.settings = async (main) => {
           currency: curI.value || "Rs", statement_footer: footI.value,
           invoice_prefix: prefixI.value || "INV-",
           next_invoice_no: String(Math.max(1, parseInt(nextNoI.value, 10) || 1)),
+          sample_rate: String(Math.max(0, parseFloat(sampleRateI.value) || 205)),
         }));
         toast("Saved", "ok");
       } catch (e) { toast(e.message, "err"); }

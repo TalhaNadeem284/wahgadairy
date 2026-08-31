@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld("api", {
   purchaseDelete: (id) => invoke("purchases:delete", id),
   purchaseSuppliers: () => invoke("purchases:suppliers"),
 
+  homeMilkList: (filter) => invoke("homemilk:list", filter),
+  homeMilkForDate: (date) => invoke("homemilk:forDate", date),
+  homeMilkSave: (h) => invoke("homemilk:save", h),
+  homeMilkDelete: (id) => invoke("homemilk:delete", id),
+
   expensesList: (filter) => invoke("expenses:list", filter),
   expenseSave: (x) => invoke("expenses:save", x),
   expenseDelete: (id) => invoke("expenses:delete", id),

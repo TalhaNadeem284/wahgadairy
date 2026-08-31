@@ -177,6 +177,11 @@ handle("purchases:save", (p) => { requireDb(); return db.savePurchase(p); });
 handle("purchases:delete", (id) => { requireDb(); return db.deletePurchase(id); });
 handle("purchases:suppliers", () => { requireDb(); return db.listSuppliers(); });
 
+handle("homemilk:list", (filter) => { requireDb(); return db.listHomeMilk(filter || {}); });
+handle("homemilk:forDate", (date) => { requireDb(); return db.homeMilkForDate(date); });
+handle("homemilk:save", (h) => { requireDb(); return db.saveHomeMilk(h); });
+handle("homemilk:delete", (id) => { requireDb(); return db.deleteHomeMilk(id); });
+
 /* ---------- expenses ---------- */
 handle("expenses:list", (filter) => { requireDb(); return db.listExpenses(filter || {}); });
 handle("expenses:save", (x) => { requireDb(); return db.saveExpense(x); });
