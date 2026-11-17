@@ -3,6 +3,7 @@ services:
     name: wahga-dairy-api
     runtime: node
     plan: free
+    branch: online-mode
     region: singapore
     buildCommand: npm install --omit=dev --ignore-scripts && npm install --prefix server --omit=dev
     startCommand: node server/index.js
@@ -13,7 +14,7 @@ services:
       - key: TZ
         value: Asia/Karachi
       - key: TURSO_DATABASE_URL
-        sync: false
+        value: libsql://wahga-dairy-mnadeem03.aws-ap-southeast-1.turso.io
       - key: TURSO_AUTH_TOKEN
         sync: false
       - key: APP_PASSWORD
