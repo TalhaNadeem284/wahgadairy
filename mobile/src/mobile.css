@@ -1,0 +1,82 @@
+/* Wahga Dairy Farm — phone layout, loaded after ../renderer/styles.css */
+
+#mobilebar {
+  display: flex; align-items: center; gap: 12px;
+  position: sticky; top: 0; z-index: 40;
+  background: #0b3d1f; color: #fff;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+  font-weight: 700; font-size: 16px;
+}
+#mobilebar button {
+  background: none; border: 0; color: #fff; font-size: 24px; line-height: 1;
+  padding: 4px 8px; margin-left: -8px;
+}
+#mobilebar #refreshBtn { font-size: 20px; margin: 0 -6px 0 0; }
+#mobilebar .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+#app { display: block; height: auto; min-height: 100vh; overflow: visible; }
+#main { padding: 14px 14px calc(env(safe-area-inset-bottom, 0px) + 70px); overflow: visible; }
+
+/* sidebar becomes a slide-in menu */
+#sidebar {
+  position: fixed; top: 0; bottom: 0; left: 0; z-index: 60;
+  width: 260px; max-width: 82vw; overflow-y: auto;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 18px);
+  transform: translateX(-105%); transition: transform .2s ease;
+  box-shadow: 8px 0 30px rgba(0, 0, 0, .25);
+}
+#sidebar.hidden { display: flex; }
+body.nav-open #sidebar { transform: none; }
+#navshade { display: none; position: fixed; inset: 0; z-index: 55; background: rgba(15, 23, 42, .4); }
+body.nav-open #navshade { display: block; }
+#sidebar nav button { padding: 12px 12px; font-size: 15px; }
+
+/* text and controls sized for fingers (16px stops Android zooming into inputs) */
+body { font-size: 15px; }
+html, body { height: auto; min-height: 100%; } /* a 100%-tall body lets the sticky top bar scroll away */
+input, select, textarea { font-size: 16px !important; }
+.btn { min-height: 40px; }
+
+.page-head h1 { font-size: 20px; }
+.page-head .row.between { flex-direction: column; align-items: stretch; gap: 10px; }
+.page-head .row { gap: 8px; }
+.row { gap: 10px; }
+.row > .field { flex: 1 1 140px; min-width: 0; }
+
+.card { padding: 14px; }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+
+/* wide tables scroll sideways instead of squashing */
+.table-wrap, .card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table.data { min-width: max-content; }
+table.data th, table.data td { padding: 9px 10px; white-space: nowrap; }
+.table-search input { width: 100%; }
+
+/* drawers and dialogs use the whole screen */
+.drawer { width: 100%; max-width: 100vw; padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px 24px; }
+.modal { width: 100% !important; max-width: 96vw; max-height: 92vh; padding: 16px; }
+.drawer-actions { flex-wrap: wrap; position: sticky; bottom: -24px; background: var(--surface); padding: 10px 0; }
+
+.toast-wrap { top: calc(env(safe-area-inset-top, 0px) + 60px); width: 92vw; align-items: center; }
+
+/* Daily Entry: each house is a small card — name on top, litres / type / rate / ＋type below */
+table.data.daily-round { min-width: 0; width: 100%; }
+table.daily-round thead { display: none; }
+table.daily-round tbody tr {
+  display: grid; grid-template-columns: 1fr 1.2fr 1fr auto; gap: 6px 8px; align-items: start;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+table.daily-round tbody td { padding: 0; border: 0; white-space: normal; }
+table.daily-round tbody td:first-child { grid-column: 1 / -1; font-weight: 600; }
+table.daily-round tbody td input, table.daily-round tbody td select { width: 100% !important; }
+table.daily-round tfoot tr { display: flex; justify-content: space-between; }
+table.daily-round tfoot td:empty { display: none; }
+
+/* Milk Order: fits the screen, names wrap */
+table.data.order-plan { min-width: 0; width: 100%; }
+table.order-plan th, table.order-plan td { white-space: normal; padding: 8px 6px; }
+table.order-plan td input[type=number] { width: 76px !important; }
+
+#sidebar .dbinfo .sync { display: none; }
+table.daily-round tbody tr.group-row { display: block; padding: 8px 10px; }
+table.daily-round tbody tr.group-row td { display: block; padding: 0; }

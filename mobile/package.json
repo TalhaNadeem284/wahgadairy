@@ -1,0 +1,22 @@
+{
+  "name": "wahga-dairy-mobile",
+  "version": "1.3.0",
+  "private": true,
+  "description": "Android version of Wahga Dairy Farm (Capacitor) - reuses ../renderer and ../db.js",
+  "scripts": {
+    "build:www": "node build-www.js",
+    "sync": "node build-www.js && npx cap sync android",
+    "apk": "node build-www.js && npx cap sync android && cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.3",
+    "@capacitor/app": "^6.0.3",
+    "@capacitor/core": "^6.2.3",
+    "@capacitor/filesystem": "^6.0.4",
+    "@capacitor/share": "^6.0.4",
+    "html2pdf.js": "^0.10.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.3"
+  }
+}

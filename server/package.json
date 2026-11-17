@@ -1,0 +1,17 @@
+{
+  "name": "wahga-dairy-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Online API for Wahga Dairy Farm: runs ../db.js against Turso",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "import": "node import-db.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0"
+  }
+}

@@ -4,3 +4,23 @@ dist/
 scratch/
 
 seed/*.db
+
+# online server secrets
+server/.env
+*.db-journal
+
+# Android signing key + its password — NEVER commit (backup kept in Documents)
+*.jks
+*.keystore
+mobile/keys/
+mobile/android/keystore.properties
+# generated / build output
+mobile/www/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/capacitor-cordova-android-plugins/
+mobile/android/app/src/main/assets/public/
+# stray old copy of renderer/app.js (not loaded)
+/app.js

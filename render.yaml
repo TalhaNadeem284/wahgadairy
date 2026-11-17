@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: wahga-dairy-api
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install --omit=dev --ignore-scripts && npm install --prefix server --omit=dev
+    startCommand: node server/index.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: TZ
+        value: Asia/Karachi
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: APP_PASSWORD
+        sync: false

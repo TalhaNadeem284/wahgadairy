@@ -1,0 +1,8 @@
+{
+  "appId": "com.wahgadairy.mobile",
+  "appName": "Wahga Dairy Farm",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  }
+}
