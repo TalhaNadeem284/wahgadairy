@@ -17,8 +17,80 @@
   const today = () => new Date().toLocaleDateString("en-CA");
   const safeName = (s) => String(s || "file").replace(/[<>:"/\\|?*]+/g, "-");
 
+  /* ---------- online database (same server as the computers) ---------- */
+  const ONLINE_KEY = "wahga-online";
+  const onlineCfg = () => { try { return JSON.parse(localStorage.getItem(ONLINE_KEY) || "null"); } catch { return null; } };
+  let online = null;        // connected client
+  let onlineError = null;
+  const cleanUrl = (u) => { let s = String(u || "").trim().replace(/\/+$/, ""); if (s && !/^https?:\/\//i.test(s)) s = "https://" + s; return s; };
+  function makeClient(url, password) {
+    const base = cleanUrl(url);
+    let lastVersion = 0, awake = false;
+    async function request(p, { method = "GET", body, timeout } = {}) {
+      const ms = timeout || (awake ? 60000 : 100000); // the free server can take ~1 min to wake up
+      let timer;
+      const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const t = new Promise((_, rej) => { timer = setTimeout(() => { try { ctl && ctl.abort(); } catch {} rej(new Error("The online server did not answer in time. Check the internet and try again.")); }, ms); });
+      let res;
+      try {
+        res = await Promise.race([fetch(base + p, {
+          method,
+          headers: { authorization: "Bearer " + password, "content-type": "application/json" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: ctl ? ctl.signal : undefined,
+        }), t]);
+      } catch (e) {
+        if (/did not answer/.test(String(e && e.message))) throw e;
+        throw new Error("No internet / can't reach the online server. Nothing was saved — try again when connected.");
+      } finally { clearTimeout(timer); }
+      awake = true;
+      if (res.status === 401) throw new Error("Wrong password for the online database.");
+      if (res.status === 429) throw new Error("Too many wrong passwords — wait a few minutes.");
+      return res;
+    }
+    async function json(p, opts) {
+      const res = await request(p, opts);
+      let out;
+      try { out = await res.json(); } catch { throw new Error("Online server error (" + res.status + ")."); }
+      if (out && out.version) lastVersion = Math.max(lastVersion, out.version);
+      if (!out || out.ok !== true) throw new Error((out && out.error) || "Online server error (" + res.status + ").");
+      return out;
+    }
+    return {
+      url: base,
+      ping: () => json("/api/ping", { timeout: 100000 }),
+      call: async (fn, args) => (await json("/api/call", { method: "POST", body: { fn, args } })).data,
+      async changedElsewhere() { const before = lastVersion; const out = await json("/api/version", { timeout: 15000 }); return before > 0 && out.version > before; },
+      async backupBytes() { const res = await request("/api/backup"); if (!res.ok) throw new Error("Backup failed (" + res.status + ")."); return new Uint8Array(await res.arrayBuffer()); },
+    };
+  }
+  function remoteDb(client) {
+    const special = { isOpen: () => true, currentPath: () => "Online · " + client.url, ensureFresh: () => false };
+    return new Proxy({}, { get(_t, p) {
+      if (p in special) return special[p];
+      const v = db[p];
+      if (typeof v !== "function") return v;
+      return (...args) => client.call(p, args);
+    } });
+  }
+  async function connectOnline(url, password) {
+    const c = makeClient(url, password);
+    await c.ping();
+    online = c;
+    onlineError = null;
+    window.WAHGA_ONLINE_DB = remoteDb(c);
+    return c;
+  }
+  window.WAHGA_IS_ONLINE = () => !!online;
+  window.WAHGA_ONLINE_MODE = () => !!onlineCfg();
+
   const ready = (async () => {
     await F.load();
+    const cfg = onlineCfg();
+    if (cfg) { // online phone: no local data file, everything comes from the server
+      try { await connectOnline(cfg.url, cfg.password); } catch (e) { onlineError = e.message; }
+      return;
+    }
     // not linked to the shared Drive file yet: open nothing, the app shows the "connect" screen
     const S = window.WAHGA_SYNC;
     if (!S || !S.status().connected || !F.currentBytes()) return;
@@ -118,6 +190,10 @@
   const notOnPhone = () => { throw new Error("Not available on the phone. Use “Open a different database file” to load the data file."); };
   Object.assign(H, {
     "db:status": () => {
+      if (online || onlineCfg()) {
+        return { open: !!online, path: online ? "Online · " + online.url : null, configuredPath: null,
+          online: !!online, onlineMode: !!onlineCfg(), serverUrl: (onlineCfg() || {}).url || "", onlineError: online ? null : onlineError };
+      }
       const st = window.WAHGA_SYNC && window.WAHGA_SYNC.status();
       return { open: db.isOpen(), path: st && st.connected ? `Google Drive: ${st.file} (shared)` : "Not connected", configuredPath: null };
     },
@@ -125,14 +201,36 @@
     // a one-time copy would leave the shared file untouched
     "db:pick": linkOrImport,
     "db:pickExisting": linkOrImport,
-    "db:openFolder": exportDb,
-    "db:backup": exportDb,
+    "db:openFolder": () => (online ? onlineBackup() : exportDb()),
+    "db:backup": () => (online ? onlineBackup() : exportDb()),
+    "online:connect": async (url, password) => {
+      const u = cleanUrl(url);
+      if (!u) throw new Error("Enter the server address.");
+      if (!password) throw new Error("Enter the password.");
+      await connectOnline(u, password);
+      localStorage.setItem(ONLINE_KEY, JSON.stringify({ url: u, password }));
+      return { url: u };
+    },
+    "online:retry": async () => {
+      const cfg = onlineCfg();
+      if (!cfg) throw new Error("Not set up for the online database.");
+      try { await connectOnline(cfg.url, cfg.password); } catch (e) { onlineError = e.message; throw e; }
+      return { ok: true, online: true };
+    },
+    "online:disconnect": async () => {
+      localStorage.removeItem(ONLINE_KEY);
+      online = null;
+      window.WAHGA_ONLINE_DB = null;
+      setTimeout(() => location.reload(), 300); // back to the phone's own data / Drive file
+      return { open: false };
+    },
     "db:cloudFolders": () => [],
     "db:openPath": notOnPhone,
     "db:useCloud": notOnPhone,
     "db:moveTo": notOnPhone,
     // 🔄 Refresh: on the phone, "newer data" lives in the Google Drive file
     "db:reload": async () => {
+      if (online) { await online.ping(); return { reloaded: false, online: true, mtime: Date.now(), path: "online" }; }
       const S = window.WAHGA_SYNC;
       const reloaded = S && S.status().connected ? await S.pull() : db.ensureFresh();
       return { reloaded, path: "phone" };
@@ -155,6 +253,22 @@
     },
   });
 
+  async function onlineBackup() {
+    const bytes = await online.backupBytes();
+    return shareFiles([{ name: `wahga-dairy-online-${today()}.db`, base64: F.bytesToBase64(bytes) }], "Wahga Dairy backup");
+  }
+
+  /* ---------- online: tell the screens when another device saved ---------- */
+  const changeListeners = new Set();
+  let polling = false;
+  setInterval(async () => {
+    if (!online || document.hidden || polling || !changeListeners.size) return;
+    polling = true;
+    try { if (await online.changedElsewhere()) changeListeners.forEach((cb) => { try { cb(); } catch {} }); }
+    catch { /* offline for a moment */ }
+    finally { polling = false; }
+  }, 5000);
+
   /* ---------- Google Drive: pull before a change, push after it ---------- */
   const S = () => window.WAHGA_SYNC;
   const changesData = (channel) => !channel.startsWith("db:") && /:\w*(save|delete|create)/i.test(channel);
@@ -171,7 +285,7 @@
         await ready;
         const fn = H[channel];
         if (!fn) throw new Error("Not available on the phone: " + channel);
-        const synced = S() && S().status().connected && changesData(channel);
+        const synced = !online && !onlineCfg() && S() && S().status().connected && changesData(channel);
         if (synced) await pullQuietly();
         const data = await fn(...args);
         if (synced) S().push().catch(() => toast("Saved on the phone. Could not save to Google Drive yet — will try again.", "err"));
@@ -181,8 +295,8 @@
         return { ok: false, error: (err && err.message) || String(err) };
       }
     },
-    on() {}, // no other computers push changes into the phone app
-    removeListener() {},
+    on(channel, listener) { if (channel === "db:external-change") changeListeners.add(listener); },
+    removeListener(channel, listener) { changeListeners.delete(listener); },
   };
   const contextBridge = { exposeInMainWorld: (key, value) => { window[key] = value; } };
   window.MOBILE_ELECTRON = { ipcRenderer, contextBridge };

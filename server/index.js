@@ -118,6 +118,19 @@ function noteFail(ip) {
 }
 
 /* ---------- http ---------- */
+// The Android app's web view runs on https://localhost; the desktop app sends no Origin.
+const ALLOWED_ORIGINS = new Set(["https://localhost", "http://localhost", "capacitor://localhost"]);
+function cors(req, res) {
+  const o = req.headers.origin;
+  if (o && ALLOWED_ORIGINS.has(o)) {
+    res.setHeader("Access-Control-Allow-Origin", o);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Headers", "authorization, content-type");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Max-Age", "86400");
+  }
+}
+
 function send(res, status, body, req) {
   const json = Buffer.from(JSON.stringify(body));
   const headers = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
@@ -147,6 +160,8 @@ function readBody(req, limit = 5 * 1024 * 1024) {
 const server = http.createServer(async (req, res) => {
   const ip = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
   const url = new URL(req.url, "http://x");
+  cors(req, res);
+  if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   try {
     if (url.pathname === "/" || url.pathname === "/healthz") {
       return send(res, 200, { ok: true, service: "wahga-dairy-api" }, req);
