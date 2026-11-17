@@ -1,14 +1,14 @@
 {
   "name": "wahga-dairy-desktop",
-  "version": "1.3.4",
-  "description": "Offline desktop app for Wahga Dairy Farm - daily milk deliveries, per-client pricing, purchases, expenses, profit/loss and printable client statements. Shared SQLite database (cloud-synced folder).",
+  "version": "1.4.0",
+  "description": "Desktop app (online or shared-file database) for Wahga Dairy Farm - daily milk deliveries, per-client pricing, purchases, expenses, profit/loss and printable client statements. Shared SQLite database (cloud-synced folder).",
   "main": "main.js",
   "author": "Musa Nadeem",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "build:seed": "node scripts/refresh-seed.js",
-    "pack": "electron-packager . \"Wahga Dairy Farm\" --platform=win32 --arch=x64 --out=dist --overwrite --app-version=1.3.4 --prune=true --ignore=\"^/(dist$|scratch)\"",
+    "pack": "electron-packager . \"Wahga Dairy Farm\" --platform=win32 --arch=x64 --out=dist --overwrite --app-version=1.4.0 --prune=true --ignore=\"^/(dist$|scratch)\"",
     "dist": "electron-builder"
   },
   "build": {
